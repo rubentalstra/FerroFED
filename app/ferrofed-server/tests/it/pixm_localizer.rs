@@ -85,7 +85,8 @@ fn gateway(dir: &Path, urls: [&str; 3], manager: &str) -> Result<Router, Box<dyn
         "[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = 2000\noverall_timeout_ms = 3000\nnode_selection = \"localized\"\nid = \"example-federation\"\n\n[federation.localization]\ntimeout_ms = 1000\n\n[[pixm.manager]]\nurl = \"{manager}\"\n\n[pixm.manager.members]\n{members}",
         document = toml::Value::String(document.display().to_string()),
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
     Ok(ferrofed_server::router(
         Arc::new(AppState::with_federation(federation)),

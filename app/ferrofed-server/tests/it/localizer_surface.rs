@@ -170,7 +170,8 @@ fn scripted(
         "test-scripted",
         on_failure,
         Duration::from_millis(500),
-    ));
+    ))
+    .with_signer(crate::support::signer("example-federation")?);
     let state = Arc::new(AppState::with_federation(federation));
     Ok((
         ferrofed_server::router(Arc::clone(&state), &settings_with_room()),
@@ -365,7 +366,8 @@ async fn a_gateway_with_no_localizer_reports_none() -> TestResult {
         Some(Arc::new(KnownAt(BOTH))),
         Context::new(Targeting::AskAll),
         Budget::new(Duration::from_secs(2), Duration::from_secs(3))?,
-    );
+    )
+    .with_signer(crate::support::signer("example-federation")?);
     let app = ferrofed_server::router(
         Arc::new(AppState::with_federation(federation)),
         &settings_with_room(),

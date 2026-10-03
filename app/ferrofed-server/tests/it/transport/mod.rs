@@ -93,10 +93,10 @@ fn pix(url: &str) -> String {
 /// document `document`, with `tables` appended.
 fn configuration(profile: &str, document: &Path, tables: &str) -> String {
     let document = toml::Value::String(document.display().to_string());
-    format!(
+    crate::support::signed(&format!(
         "profile = \"{profile}\"\n\n[registry]\ndocument = {document}\n\n\
          [federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{tables}"
-    )
+    ))
 }
 
 /// Writes the registry of node A at `a` and node B under `dir`, and returns
@@ -562,13 +562,13 @@ fn a_reload_cannot_switch_to_development_to_send_a_credential_in_cleartext() -> 
 /// `url`, which carries no assertion, over the registry `document`.
 fn xcpd_configuration(profile: &str, document: &Path, url: &str) -> String {
     let document = toml::Value::String(document.display().to_string());
-    format!(
+    crate::support::signed(&format!(
         "profile = \"{profile}\"\n\n[registry]\ndocument = {document}\n\n\
          [federation]\nnode_selection = \"localized\"\nid = \"example-federation\"\n\n\
          [xcpd]\nsender_device = \"2.999.40.1\"\naudit = \"log\"\n\n\
          [[xcpd.gateway]]\nurl = \"{url}\"\ndevice = \"2.999.50.1\"\n\n\
          [xcpd.communities]\n\"2.999.50\" = \"node-a\"\n\"2.999.60\" = \"node-b\"\n"
-    )
+    ))
 }
 
 #[test]
