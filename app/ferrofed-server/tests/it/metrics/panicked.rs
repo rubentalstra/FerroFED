@@ -84,7 +84,8 @@ async fn a_fan_out_task_that_panics_fails_the_upload_and_blames_no_member() -> T
         Context::new(Targeting::AskAll),
         Budget::new(Duration::from_secs(2), Duration::from_secs(3))?,
     )
-    .with_template_fan_out(true);
+    .with_template_fan_out(true)
+    .with_signer(crate::support::signer("example-federation")?);
     let state = Arc::new(AppState::with_federation(federation));
     let app = ferrofed_server::router(Arc::clone(&state), &settings_with_room());
     let template = "<template><template_id><value>synthetic.t.v1</value></template_id></template>";

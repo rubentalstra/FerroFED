@@ -73,6 +73,7 @@ use crate::facade::route::fan_out::{
 use crate::facade::route::{Arrived, Deadlines};
 use crate::facade::security;
 use crate::federation::Federation;
+use ferrofed_engine::onward::conveyance::Conveyance;
 use ferrofed_engine::outbound_id::OutboundId;
 
 /// The `code` of a member whose copy differs from the registry's.
@@ -213,7 +214,7 @@ pub(super) async fn distribute(
     federation: &Federation,
     definition: &StoredDefinition,
     (registry, selected): (Registry, &BTreeSet<EndpointId>),
-    (outbound, started): (OutboundId, Instant),
+    (outbound, conveyance, started): (OutboundId, &Conveyance, Instant),
 ) -> Result<Response, Refused> {
     let logged = outbound.to_string();
     let targets = fan_out::targets(federation.snapshot(), selected)
@@ -224,7 +225,7 @@ pub(super) async fn distribute(
     let sent = each(
         federation,
         &targets,
-        (&budget, outbound),
+        (&budget, outbound, conveyance),
         &logged,
         |client, options| {
             let (name, version, aql) = (name.clone(), version.clone(), aql.clone());
@@ -293,7 +294,7 @@ pub(super) async fn drift(
     let sent = each(
         federation,
         &targets,
-        (&budget, arrived.outbound),
+        (&budget, arrived.outbound, &arrived.conveyance),
         &logged,
         |client, options| {
             let (name, version) = (name.clone(), version.clone());

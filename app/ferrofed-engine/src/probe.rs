@@ -32,6 +32,7 @@ use tokio::task::{JoinError, JoinSet};
 
 use crate::dispatch::{Contact, DispatchOptions, NodeClients};
 use crate::forward::{ClientRequest, ForwardError, Forwarded, HeldRequest};
+use crate::onward::conveyance::Conveyance;
 use crate::outbound_id::OutboundId;
 
 /// What one member answered the probe.
@@ -146,6 +147,9 @@ pub struct Probe {
     pub overall: Instant,
     /// The gateway's id for the request, the one every member receives.
     pub request_id: OutboundId,
+    /// The identity every member is told the probe is asked on behalf of
+    /// (§13.1, N24).
+    pub conveyance: Conveyance,
 }
 
 impl Probe {
@@ -187,7 +191,8 @@ where
         asked.push(client);
     }
     let deadline = probe.per_node.min(probe.overall);
-    let options = DispatchOptions::new(deadline).with_request_id(probe.request_id);
+    let options =
+        DispatchOptions::new(deadline, probe.conveyance.clone()).with_request_id(probe.request_id);
     let path = probe.path();
     let mut tasks = JoinSet::new();
     let asked_at = Instant::now();

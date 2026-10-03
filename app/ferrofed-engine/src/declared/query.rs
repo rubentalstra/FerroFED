@@ -42,7 +42,7 @@ pub(crate) fn admitted(
         .filter(|pair| !pair.is_empty())
         .position(|pair| {
             let name = pair.split('=').next().unwrap_or(pair);
-            !admits(&hygiene::percent_decoded(name))
+            !admits(&hygiene::decode::percent_decoded(name))
         });
     match unlisted {
         Some(index) => Err(UnlistedParameter {
@@ -57,11 +57,11 @@ pub(super) fn values(operation: &RouteMatch, query: &str) -> Result<(), Malforme
     let pairs = query.split('&').filter(|pair| !pair.is_empty());
     for (index, pair) in pairs.enumerate() {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-        let Some(param) = operation.query_key(&hygiene::percent_decoded(name)) else {
+        let Some(param) = operation.query_key(&hygiene::decode::percent_decoded(name)) else {
             continue;
         };
         let list = !param.explode;
-        if !fits(&param.kind, &hygiene::percent_decoded(value), list) {
+        if !fits(&param.kind, &hygiene::decode::percent_decoded(value), list) {
             return Err(MalformedValue {
                 carrier: Carrier::Query {
                     position: index.saturating_add(1),

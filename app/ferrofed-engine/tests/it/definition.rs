@@ -64,7 +64,10 @@ fn options() -> Result<DispatchOptions, Box<dyn Error>> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(2))
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline))
+    Ok(DispatchOptions::new(
+        deadline,
+        crate::conveyed::conveyance(),
+    ))
 }
 
 /// A node answering `verb` at the definition's path with `status` and

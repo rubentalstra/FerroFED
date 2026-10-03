@@ -67,6 +67,7 @@ flowchart LR
     subgraph composed["Composed by the gateway"]
         aql["Node AQL<br/>and paging"]
         path["URL path with<br/>the node's ehr_id"]
+        conv["openEHR-federation-client<br/>caller claims"]
     end
     ch -->|"declared"| gate["Outbound gate"]
     ch -->|"Authorization,<br/>X-Request-Id,<br/>openEHR-federation-*"| held["Withheld"]
@@ -75,12 +76,18 @@ flowchart LR
     cb -->|"byte for byte"| node["Node"]
     aql -->|"searched"| gate
     path -->|"searched"| gate
+    conv -->|"searched"| gate
     gate -->|"clean"| node
     gate -->|"value found"| stop["Not sent"]
 ```
 
 - The URL authority and the `Host` header come from your registry, never
   from a request, so the gate does not read them (§5.4.1).
+- The `openEHR-federation-client` token the gateway signs for each node
+  carries claims about the verified caller. The gate reads each of them
+  before it is signed, and a caller claim that would carry the identifier
+  refuses the request with nothing sent
+  ([What a node is told about the caller](../operate/authentication.md#what-a-node-is-told-about-the-caller)).
 - A write body is clinical content. A `DV_IDENTIFIER` inside a committed
   `COMPOSITION` reaches the node byte for byte, because the gateway has no
   right to alter it (§5.4 scope note, N22).

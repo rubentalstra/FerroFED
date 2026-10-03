@@ -180,11 +180,8 @@ impl<T: Transport> NodeClient<T> {
         options: &DispatchOptions,
     ) -> Result<openehr_its::rest::client::CallOptions, DispatchError> {
         options
-            .call_options()
-            .map_err(|source| DispatchError::Compose {
-                endpoint: self.endpoint.clone(),
-                source: Box::new(source),
-            })
+            .call_options(&self.endpoint)
+            .map_err(|error| DispatchError::of_options(&self.endpoint, error))
     }
 
     /// The outcome of a call that reached no documented answer, carrying the
@@ -284,6 +281,7 @@ impl<T: Transport> NodeClient<T> {
             path_segment(&definition.version)
         ));
         let headers: [(&'static str, &str); 0] = [];
+        let conveyed = options.conveyance().carried();
         let outbound = Outbound {
             aql,
             scope: None,
@@ -291,6 +289,7 @@ impl<T: Transport> NodeClient<T> {
             url: &url,
             composed: Composed::default(),
             headers: &headers,
+            conveyed: &conveyed,
         };
         match options.withheld.found_in(&outbound) {
             Some(part) => Err(DispatchError::Withheld {

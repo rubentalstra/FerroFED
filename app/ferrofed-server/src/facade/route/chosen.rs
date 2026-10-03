@@ -97,7 +97,7 @@ pub(super) async fn to_named(
         "routed to the endpoint the targeting headers name"
     );
     let provenance = Provenance::of(snapshot, endpoint);
-    let sent = (request, arrived.outbound);
+    let sent = (request, arrived.outbound, &arrived.conveyance);
     match forward(federation, endpoint, sent, &budget, &logged).await {
         Ok(forwarded) => provenance.stamp(answered(forwarded)),
         Err(Failure::Internal) => error::fixed(Code::Internal, request_id),

@@ -60,7 +60,10 @@ fn options() -> Result<DispatchOptions, Box<dyn Error>> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(10))
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline))
+    Ok(DispatchOptions::new(
+        deadline,
+        crate::conveyed::conveyance(),
+    ))
 }
 
 /// A node that answers a `return=minimal` create with `201`, the `ehr_id` in
@@ -110,7 +113,10 @@ async fn a_create_whose_deadline_passed_before_it_left_is_expired_and_never_sent
     let client = client_at(&format!("{}/openehr", server.uri()))?;
     let status: EhrStatus = from_canonical_json(EHR_STATUS)?;
     let created = client
-        .create_ehr(&status, &DispatchOptions::new(Instant::now()))
+        .create_ehr(
+            &status,
+            &DispatchOptions::new(Instant::now(), crate::conveyed::conveyance()),
+        )
         .await;
     let Err(error) = created else {
         return Err(format!("an expired create succeeded: {created:?}").into());
@@ -138,7 +144,10 @@ async fn a_read_the_node_leaves_unanswered_is_a_time_out_of_a_silent_node() -> T
         .checked_add(Duration::from_millis(200))
         .ok_or("the deadline is past the platform clock")?;
     let read = client
-        .read_ehr(EHR_ID, &DispatchOptions::new(deadline))
+        .read_ehr(
+            EHR_ID,
+            &DispatchOptions::new(deadline, crate::conveyed::conveyance()),
+        )
         .await;
     let Err(error) = read else {
         return Err("a silent node answered".into());

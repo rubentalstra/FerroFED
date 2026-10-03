@@ -51,6 +51,7 @@ pub mod base_path;
 pub mod body;
 pub mod cli;
 pub mod config;
+pub mod conveyed;
 mod development;
 pub mod error;
 pub mod facade;
@@ -615,6 +616,7 @@ async fn dependencies(State(state): State<Arc<AppState>>) -> Json<health::depend
 async fn unrouted(
     State(state): State<Arc<AppState>>,
     outbound: Option<Extension<OutboundId>>,
+    caller: Option<Extension<auth::caller::Caller>>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -632,6 +634,14 @@ async fn unrouted(
     if method == Method::OPTIONS {
         return facade::options::allow(&state, path, request_id);
     }
+    let federation = state.federation();
+    let Some(serving) = federation.as_deref() else {
+        return error::fixed(error::Code::NotImplemented, request_id);
+    };
+    let conveyance = match conveyed::of(serving, caller.as_deref()) {
+        Ok(conveyance) => conveyance,
+        Err(unconveyed) => return unconveyed.respond(request_id, &outbound.to_string()),
+    };
     let mut arrived = facade::route::Arrived {
         method: &method,
         path,
@@ -640,8 +650,8 @@ async fn unrouted(
         body,
         request_id,
         outbound,
+        conveyance,
     };
-    let federation = state.federation();
     if let (Some(federation), Some(definitions)) = (federation.as_deref(), state.definitions())
         && let Lookup::Matched(matched) = routes::lookup(&method, path)
     {

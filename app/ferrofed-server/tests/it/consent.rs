@@ -271,7 +271,7 @@ fn localized_gateway(
         "profile = \"development\"\n\n[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = 2000\noverall_timeout_ms = 3000\nnode_selection = \"localized\"\nid = \"example-federation\"\n\n[federation.localization]\ntimeout_ms = 500\n\n{rows}{consent}"
     );
     let settings = ferrofed_server::config::Config::from_sources(
-        Some(&text),
+        Some(&crate::support::signed(&text)),
         &std::collections::BTreeMap::new(),
     )?
     .resolve()?;
@@ -517,7 +517,8 @@ async fn a_prefilter_that_cannot_answer_leaves_every_candidate_to_its_node() -> 
         openehr_federation::aql::Context::new(openehr_federation::aql::Targeting::AskAll),
         ferrofed_engine::fanout::Budget::new(Duration::from_secs(2), Duration::from_secs(3))?,
     )
-    .with_consent_prefilter(Arc::new(Down));
+    .with_consent_prefilter(Arc::new(Down))
+    .with_signer(crate::support::signer("example-federation")?);
     let app = ferrofed_server::router(
         Arc::new(ferrofed_server::state::AppState::with_federation(
             federation,

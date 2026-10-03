@@ -72,6 +72,7 @@ use tokio::task::{JoinError, JoinSet};
 
 use crate::dispatch::{Contact, DispatchError, DispatchOptions, NodeClients, NodeQuery, NodeReply};
 use crate::hygiene::Withheld;
+use crate::onward::conveyance::Conveyance;
 use crate::outbound_id::OutboundId;
 
 /// The completion policy the budget applies under, as `OPTIONS {base}/` and
@@ -584,10 +585,10 @@ pub enum FanOutError {
 /// (§11.4, §11.5).
 ///
 /// Each request carries a per-node deadline, the budget's per-node timeout
-/// from now and never past the overall deadline; the one minted `request_id`
-/// travels to every node. When the overall budget runs out, every node still
-/// outstanding is abandoned and reported `time-out` with the time it was
-/// given, and its task is dropped: a late answer contributes nothing.
+/// from now and never past the overall deadline; the `conveyance` and the
+/// minted `request_id` go to every node. When the overall budget runs out,
+/// every node still outstanding is abandoned and reported `time-out` with
+/// the time it was given, its task dropped: a late answer adds nothing.
 ///
 /// # Errors
 ///
@@ -605,12 +606,20 @@ pub async fn fan_out<T>(
     snapshot: &RegistrySnapshot,
     plan: Plan,
     budget: Budget,
-    request_id: Option<OutboundId>,
+    (conveyance, request_id): (&Conveyance, Option<OutboundId>),
 ) -> Result<FederatedAnswer, FanOutError>
 where
     T: Transport + Clone + 'static,
 {
-    fan_out_within(clients, snapshot, plan, budget, Instant::now(), request_id).await
+    fan_out_within(
+        clients,
+        snapshot,
+        plan,
+        budget,
+        Instant::now(),
+        (conveyance, request_id),
+    )
+    .await
 }
 
 /// Sends every query of `plan` to its node at once, inside the overall budget
@@ -633,7 +642,7 @@ pub async fn fan_out_within<T>(
     plan: Plan,
     budget: Budget,
     started: Instant,
-    request_id: Option<OutboundId>,
+    (conveyance, request_id): (&Conveyance, Option<OutboundId>),
 ) -> Result<FederatedAnswer, FanOutError>
 where
     T: Transport + Clone + 'static,
@@ -669,7 +678,8 @@ where
                 endpoint: endpoint.clone(),
             })?
             .clone();
-        let mut options = DispatchOptions::new(node_deadline).with_withheld(Arc::clone(&withheld));
+        let mut options = DispatchOptions::new(node_deadline, conveyance.clone())
+            .with_withheld(Arc::clone(&withheld));
         if let Some(id) = request_id {
             options = options.with_request_id(id);
         }

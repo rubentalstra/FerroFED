@@ -165,8 +165,10 @@ fn options() -> Result<DispatchOptions, Box<dyn Error>> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline)
-        .with_withheld(Arc::new(Withheld::new([SecretString::from(SUBJECT)]))))
+    Ok(
+        DispatchOptions::new(deadline, crate::conveyed::conveyance())
+            .with_withheld(Arc::new(Withheld::new([SecretString::from(SUBJECT)]))),
+    )
 }
 
 /// Sends the node query through `client`.

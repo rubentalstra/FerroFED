@@ -137,7 +137,8 @@ fn scripted(
         Context::new(Targeting::AskAll),
         Budget::new(Duration::from_secs(2), Duration::from_secs(3))?,
     )
-    .with_consent_prefilter(Arc::new(script));
+    .with_consent_prefilter(Arc::new(script))
+    .with_signer(crate::support::signer("example-federation")?);
     let state = Arc::new(AppState::with_federation(federation));
     Ok((
         ferrofed_server::router(Arc::clone(&state), &settings_with_room()),

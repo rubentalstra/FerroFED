@@ -161,8 +161,9 @@ scope = "system/aql-*.s system/composition-*.cru"
 resource = "https://cdr-c.example.org/openehr"   # optional, RFC 8707
 # audience = "cdr-c"                             # optional
 
-# The gateway's signing keys, which sign every client assertion and are
-# published as a JWK Set. Needed by any oauth2 section.
+# The gateway's signing keys, which sign the caller's identity on every
+# request to a node and every client assertion, and are published as a JWK
+# Set. Required whenever registry.document is set.
 [signing]
 key_file = "/run/secrets/ferrofed-signing-key.pem"
 # previous_key_file = "/run/secrets/ferrofed-signing-key-previous.pem"
@@ -293,7 +294,13 @@ The caller's own `Authorization` header never reaches a node.
 ### Signing keys and the JWK Set
 
 `[signing]` holds the gateway's ES384 keys: P-384 private keys in PKCS#8
-PEM, each read from a file. To make one:
+PEM, each read from a file. It is required whenever `registry.document`
+is set: every request to a node carries the caller's identity in an
+`openEHR-federation-client` token signed with the current key
+([Client authentication](authentication.md#what-a-node-is-told-about-the-caller);
+§13.1, N24), and a federating gateway without the key refuses to start,
+naming it. The current key signs every client assertion of an `oauth2`
+grant too. To make a key:
 
 ```text
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -out ferrofed-signing-key.pem
@@ -397,17 +404,21 @@ input, and a short hexadecimal identifier can occur inside a random UUID.
 Every other header the gateway sends to a node for a federated query is fixed
 by the gateway: `Accept` and `Content-Type` (`application/json`),
 `Authorization` (the endpoint's configured onward credential, when it has
-one), and the `Host`, `Content-Length` and `Accept-Encoding` the HTTP client
+one), `openEHR-federation-client` (the verified caller, signed for that node
+with the `[signing]` key;
+[Client authentication](authentication.md#what-a-node-is-told-about-the-caller)),
+and the `Host`, `Content-Length` and `Accept-Encoding` the HTTP client
 writes. None is copied from the client request. `Host` is the authority of
 the endpoint URL in your registry, never a value from a request, so the
 outbound gate does not search it, or the URL's host and port, for a
 withheld identifier (§5.4.1, N33). It searches the path, the query string
-and the other headers, except the minted id above.
+and the other headers, except the minted id above, and every caller claim
+of `openEHR-federation-client`.
 
 A request routed to one node (`{base}/v1/ehr/{ehr_id}` and below) carries the
-same `Authorization`, `X-Request-Id`, `Host`, `Content-Length` and
-`Accept-Encoding`, and each request header the matched ITS-REST operation
-declares, of `Accept`, `Content-Type`, `If-Match`, `Prefer`,
+same `Authorization`, `openEHR-federation-client`, `X-Request-Id`, `Host`,
+`Content-Length` and `Accept-Encoding`, and each request header the matched
+ITS-REST operation declares, of `Accept`, `Content-Type`, `If-Match`, `Prefer`,
 `openehr-version`, `openehr-audit-details`, `openehr-template-id`,
 `openehr-item-tag` and `openehr-version-item-tag`, only those that operation
 lists. The list comes from the `openehr-its` parameter table, never from the

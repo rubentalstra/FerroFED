@@ -330,7 +330,8 @@ fn load_refusal(dir: &Path, text: &str) -> Result<FederationError, Box<dyn Error
     let text = format!(
         "{text}\n[registry]\ndocument = {document}\n\n[federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     match Federation::load(&settings) {
         Ok(_) => Err("the federation was built".into()),
         Err(error) => Ok(error),
@@ -384,7 +385,8 @@ fn a_registry_without_a_declared_node_selection_refuses_to_boot() -> TestResult 
         "{}\n[registry]\ndocument = {document}\n",
         pixm("http://127.0.0.1:9")
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     match Federation::load(&settings) {
         Err(FederationError::NodeSelectionUndeclared) => Ok(()),
         other => Err(format!(
@@ -397,7 +399,7 @@ fn a_registry_without_a_declared_node_selection_refuses_to_boot() -> TestResult 
 #[test]
 fn a_node_selection_the_gateway_does_not_know_refuses_to_boot() -> TestResult {
     let text = "[federation]\nnode_selection = \"nearest\"\n";
-    match Config::from_sources(Some(text), &BTreeMap::new()) {
+    match Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new()) {
         Err(error::Error::Parse { .. }) => Ok(()),
         other => Err(format!(
             "only ask-all and localized are node selections the gateway offers, refused at parse: {other:?}"
@@ -408,8 +410,11 @@ fn a_node_selection_the_gateway_does_not_know_refuses_to_boot() -> TestResult {
 
 #[test]
 fn a_pix_manager_without_a_registry_refuses_to_boot() -> TestResult {
-    let settings =
-        Config::from_sources(Some(&pixm("http://127.0.0.1:9")), &BTreeMap::new())?.resolve()?;
+    let settings = Config::from_sources(
+        Some(&crate::support::signed(&pixm("http://127.0.0.1:9"))),
+        &BTreeMap::new(),
+    )?
+    .resolve()?;
     match Federation::load(&settings) {
         Err(FederationError::PixmWithoutRegistry) => Ok(()),
         other => Err(format!("refused for its missing registry: {other:?}").into()),
@@ -419,7 +424,7 @@ fn a_pix_manager_without_a_registry_refuses_to_boot() -> TestResult {
 #[test]
 fn a_pix_manager_url_that_does_not_parse_refuses_to_boot_naming_its_key() -> TestResult {
     let text = "[[pixm.manager]]\nurl = \"not a url\"\n";
-    match Config::from_sources(Some(text), &BTreeMap::new())?.resolve() {
+    match Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?.resolve() {
         Err(error::Error::Url { key, .. }) if key == "pixm.manager[0].url" => Ok(()),
         other => Err(format!("refused naming the key: {other:?}").into()),
     }
@@ -428,7 +433,8 @@ fn a_pix_manager_url_that_does_not_parse_refuses_to_boot_naming_its_key() -> Tes
 #[test]
 fn a_configured_binding_lifetime_is_the_one_resolved() -> TestResult {
     let text = "[federation]\nbinding_ttl_ms = 1500\n";
-    let settings = Config::from_sources(Some(text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?.resolve()?;
     if settings.federation.binding_ttl == std::time::Duration::from_millis(1_500) {
         Ok(())
     } else {
@@ -443,7 +449,7 @@ fn a_configured_binding_lifetime_is_the_one_resolved() -> TestResult {
 #[test]
 fn a_zero_binding_lifetime_refuses_to_boot() -> TestResult {
     let text = "[federation]\nbinding_ttl_ms = 0\n";
-    match Config::from_sources(Some(text), &BTreeMap::new())?.resolve() {
+    match Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?.resolve() {
         Err(error::Error::Zero { key }) if key == "federation.binding_ttl_ms" => Ok(()),
         other => Err(format!("refused naming the key: {other:?}").into()),
     }
@@ -455,7 +461,8 @@ fn a_pix_manager_secret_never_reaches_debug_output() -> TestResult {
         "{}\n[pixm.manager.credentials]\nbearer_token = \"synthetic-pix-token\"\n",
         pixm("http://127.0.0.1:9")
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     // NOTE: a failure message never echoes the rendering, which would put the
     // leaked secret into the test log it is meant to keep it out of.
     assert!(

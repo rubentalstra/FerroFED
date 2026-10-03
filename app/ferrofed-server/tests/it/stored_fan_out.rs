@@ -129,7 +129,8 @@ pub(crate) fn state(
          [stored_queries]\npath = {store}\n{}",
         crossref(&[("node-a", EHR_A), ("node-b", EHR_B)])
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     Ok(Arc::new(AppState::build(&settings)?))
 }
 
@@ -346,7 +347,7 @@ async fn with_the_setting_off_a_get_naming_members_is_refused_and_reads_nothing(
 fn config_check_refuses_definition_fan_out_without_the_registry() -> TestResult {
     let text = "[registry]\ndocument = \"/etc/ferrofed/registry.toml\"\n\n\
                 [federation]\nfan_out_stored_queries = true\n";
-    let refused = Config::from_sources(Some(text), &BTreeMap::new())?
+    let refused = Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?
         .resolve()
         .err()
         .ok_or("§12.7: fan-out without the registry is refused")?;

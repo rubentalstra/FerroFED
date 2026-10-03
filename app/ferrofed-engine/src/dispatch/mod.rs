@@ -10,7 +10,8 @@
 //! too ([`definition`]), so the request line, the headers and the body are
 //! composed by that runtime and nowhere in FerroFED (no specification governs
 //! this: our own design). This
-//! module adds the per-endpoint client, the call's deadline and the gateway's
+//! module adds the per-endpoint client, the call's deadline, the caller's
+//! identity signed for the node ([`crate::onward::conveyance`]) and the gateway's
 //! [`OutboundId`], and the classification of the answer. Every header a node
 //! request carries is listed in [`crate::outbound_id`]:
 //!
@@ -43,6 +44,7 @@ use std::time::Instant;
 use crate::ehr::EhrCallError;
 use crate::forward::{ForwardError, Forwarded};
 use crate::hygiene::{Part, Withheld};
+use crate::onward::conveyance::{self, Conveyance, ConveyanceError};
 use crate::outbound_id::OutboundId;
 use ferrofed_registry::id::{EhrId, EndpointId};
 use ferrofed_registry::snapshot::{Endpoint, RegistrySnapshot};
@@ -149,11 +151,12 @@ impl NodeQuery {
 }
 
 /// The per-call options of one dispatch: the instant the node must have
-/// answered by, the gateway's [`OutboundId`], and the identifiers no request
-/// may carry.
+/// answered by, the identity the request conveys, the gateway's
+/// [`OutboundId`], and the identifiers no request may carry.
 #[derive(Debug, Clone)]
 pub struct DispatchOptions {
     deadline: Instant,
+    conveyance: Conveyance,
     request_id: Option<OutboundId>,
     withheld: Arc<Withheld>,
     composed_ehr_id: Option<EhrId>,
@@ -161,11 +164,16 @@ pub struct DispatchOptions {
 
 impl DispatchOptions {
     /// Options with `deadline` as the instant the node must have answered by
-    /// (§11.5).
+    /// (§11.5), every request conveying `conveyance` in
+    /// [`conveyance::HEADER`] (§13.1, N24, N25).
+    ///
+    /// There is no dispatch without a conveyance: a request reaches a node
+    /// only on behalf of a verified caller or of the gateway itself.
     #[must_use]
-    pub fn new(deadline: Instant) -> Self {
+    pub fn new(deadline: Instant, conveyance: Conveyance) -> Self {
         Self {
             deadline,
+            conveyance,
             request_id: None,
             withheld: Arc::new(Withheld::none()),
             composed_ehr_id: None,
@@ -224,14 +232,37 @@ impl DispatchOptions {
         self.composed_ehr_id.as_ref()
     }
 
-    /// The `openehr-its` call options for these options.
-    pub(crate) fn call_options(&self) -> Result<CallOptions, ClientError> {
-        let options = CallOptions::default().with_deadline(self.deadline);
-        match self.request_id {
-            Some(id) => options.with_header(REQUEST_ID_HEADER, &id.to_string()),
-            None => Ok(options),
-        }
+    /// The identity every request under these options conveys.
+    #[must_use]
+    pub fn conveyance(&self) -> &Conveyance {
+        &self.conveyance
     }
+
+    /// The `openehr-its` call options for these options toward `endpoint`:
+    /// the deadline, the [`conveyance::HEADER`] signed for that endpoint,
+    /// and the request id.
+    pub(crate) fn call_options(&self, endpoint: &EndpointId) -> Result<CallOptions, OptionsError> {
+        let conveyed = self.conveyance.signed_for(endpoint)?;
+        let options = CallOptions::default()
+            .with_deadline(self.deadline)
+            .with_header(conveyance::HEADER, &conveyed)?;
+        Ok(match self.request_id {
+            Some(id) => options.with_header(REQUEST_ID_HEADER, &id.to_string())?,
+            None => options,
+        })
+    }
+}
+
+/// Why the call options of one request could not be made, so nothing was
+/// sent.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OptionsError {
+    /// The caller's identity could not be signed for the node.
+    #[error(transparent)]
+    Conveyance(#[from] ConveyanceError),
+    /// A header the options carry is not legal on the wire.
+    #[error(transparent)]
+    Client(#[from] ClientError),
 }
 
 /// What one request showed of the node beside the §11.1 outcome it reports:
@@ -279,6 +310,7 @@ impl Contact {
             | ForwardError::Withheld { .. }
             | ForwardError::Credentials { .. }
             | ForwardError::Compose { .. }
+            | ForwardError::Conveyance { .. }
             | ForwardError::Unrouted => Self::Unsent,
         }
     }
@@ -293,7 +325,9 @@ impl Contact {
                 Self::Answered(*status)
             }
             EhrCallError::TimeOut { .. } | EhrCallError::Unreachable { .. } => Self::Silent,
-            EhrCallError::Withheld { .. } | EhrCallError::Expired { .. } => Self::Unsent,
+            EhrCallError::Withheld { .. }
+            | EhrCallError::Expired { .. }
+            | EhrCallError::Conveyance { .. } => Self::Unsent,
             EhrCallError::Failed { source, .. } => Self::of_client_error(source),
         }
     }
@@ -428,6 +462,32 @@ pub enum DispatchError {
         #[source]
         source: Box<ClientError>,
     },
+    /// The caller's identity could not be signed for the node, so the
+    /// request was not sent (§13.1, N24).
+    #[error("the caller's identity could not be conveyed to endpoint {endpoint}")]
+    Conveyance {
+        /// The endpoint.
+        endpoint: EndpointId,
+        /// Why it could not be signed.
+        #[source]
+        source: ConveyanceError,
+    },
+}
+
+impl DispatchError {
+    /// The error for options toward `endpoint` that could not be made.
+    pub(crate) fn of_options(endpoint: &EndpointId, error: OptionsError) -> Self {
+        match error {
+            OptionsError::Conveyance(source) => Self::Conveyance {
+                endpoint: endpoint.clone(),
+                source,
+            },
+            OptionsError::Client(source) => Self::Compose {
+                endpoint: endpoint.clone(),
+                source: Box::new(source),
+            },
+        }
+    }
 }
 
 /// The ITS-REST client of one registry endpoint.
@@ -511,11 +571,8 @@ impl<T: Transport> NodeClient<T> {
     ) -> Result<NodeReply, DispatchError> {
         self.gate(query, options)?;
         let call = options
-            .call_options()
-            .map_err(|source| DispatchError::Compose {
-                endpoint: self.endpoint.clone(),
-                source: Box::new(source),
-            })?;
+            .call_options(&self.endpoint)
+            .map_err(|error| DispatchError::of_options(&self.endpoint, error))?;
         let params = QueryExecuteAdhocQueryBodyParams {
             accept: None,
             content_type: None,

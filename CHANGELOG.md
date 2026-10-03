@@ -163,9 +163,34 @@ shaping, single-node routing and the targeting mechanisms in 0.0.6.
   configuration carry an `[auth]` section.
 - The testkit's test issuer: key pairs generated per run, its JWK Set served
   from a mock server, and tokens minted with chosen claims.
+- The caller's identity on every request to a node (#82; §13.1, N24, N25,
+  §12.4, CP-16). The federated query, every routed read and write, a
+  definition request, the template and stored-query fan-outs, the ask-all
+  probe and the read of an EHR by subject each carry
+  `openEHR-federation-client`: an ES384 JWS, typed
+  `openehr-federation-client+jwt`, signed for that one node with the
+  gateway's `[signing]` key, the key its JWK Set publishes. Its `aud` is the
+  node's endpoint id, `exp` is 60 seconds after `iat`, `jti` is fresh, and
+  `iss` is the `client_id` of the endpoint's OAuth 2.0 grant or else the
+  federation id. It names the verified caller (`sub`, `iss_upstream`), how
+  the gateway verified it (`verified_by`: `signature`, `introspection` or
+  `edge`), the caller's organisation (`subject_organization_id`), each
+  purpose of use and the scopes as granted, so a node can apply them (N26).
+  The admission check and the admin listener's redistribution name the
+  gateway itself. The book's
+  [Client authentication](https://ferrofed.eu/docs/operate/authentication.html#what-a-node-is-told-about-the-caller)
+  page gives the claims and the steps a node verifies the token with. The
+  header and its claims are FerroFED's own; §13.1 leaves end-user conveyance
+  open.
+- `scripts/quickstart/signing-key.sh` writes the compose quickstart's
+  development signing key before the first `docker compose up`, and the
+  quickstart and the release example configuration carry `[signing]`.
 
 ### Changed
 
+- `[signing]` is required whenever `registry.document` is set: a federating
+  gateway without a signing key refuses to start, and `config check` refuses
+  its configuration with exit code 78, naming the key.
 - The ADMIN API under `{base}/v1/admin/` answers `403` (`operation-refused`)
   to every caller, where it answered `501`.
 - A gateway that federates and trusts no issuer refuses to start, and
@@ -231,6 +256,13 @@ shaping, single-node routing and the targeting mechanisms in 0.0.6.
   `config check`, the start and a reload, even though the store itself
   changes only on a restart. Under the development profile it starts and is
   named in the banner, the log and `config check` (#416).
+- No request reaches a node without the caller's identity: one that reaches
+  the dispatcher with no verified caller is answered `500` and nothing is
+  sent. The conveyed token never carries a patient identifier (§5.4.1, N33):
+  it holds no IUA `person_id`, and the outbound gate reads every caller
+  claim, refusing with nothing sent a request whose claims would carry the
+  identifier its query was resolved on. A client's own
+  `openEHR-federation-client` header never reaches a node.
 
 ## [0.0.7] - 2026-10-03
 

@@ -48,10 +48,14 @@ Every client authenticates with an RFC 9068 access token from an issuer you
 trust, carrying a SMART on openEHR scope for the operation and a purpose of
 use, or through a proxy in the explicit edge mode
 ([client authentication](https://ferrofed.eu/docs/operate/authentication.html)).
-OAuth 2.0 to each node is planned for v0.0.8
-([#81](https://github.com/FerroHEALTH/FerroFED/issues/81)). Toward the nodes,
-the gateway sends a bearer token, or a user and password, that you configure
-per endpoint, and never the client's own token. The
+Toward the nodes, the gateway authenticates as itself, with OAuth 2.0 client
+credentials and a signed assertion or with a bearer token or a user and
+password you configure per endpoint, and never sends the client's own token.
+Every request to a node carries the verified client in an
+`openEHR-federation-client` token the gateway signs with its own key, which
+each node can verify against the key set the gateway publishes
+([what a node is told about the caller](https://ferrofed.eu/docs/operate/authentication.html#what-a-node-is-told-about-the-caller)).
+The
 [claims page](https://ferrofed.eu/docs/evaluate/what-ferrofed-claims.html)
 lists what each release shipped and what is planned.
 
@@ -84,9 +88,14 @@ synthetic patients over each node's ITS-REST API: one at all four nodes, one
 at two, one at one and one at none.
 
 ```sh
+scripts/quickstart/signing-key.sh
 docker compose up --wait
 scripts/quickstart/seed.sh
 ```
+
+The first script writes the gateway's development signing key, once, with
+`openssl`; the gateway signs the caller's identity onto every request to a
+node with it.
 
 Then send one ordinary ITS-REST query to the gateway for the patient every
 node knows. `scripts/quickstart/token.sh` mints the access token the
@@ -132,13 +141,16 @@ Every release also carries `compose.yaml`, which runs the gateway alone, at
 that release's image, in front of the CDRs you already run, with two example
 files it mounts. Download the three, edit `registry.toml` (your members) and
 `ferrofed.toml` (your federation id, your PIX Manager and the credentials each
-endpoint gets), put each credential file in `secrets/`, and start it:
+endpoint gets), put each credential file and the gateway's signing key in
+`secrets/`, and start it:
 
 ```sh
 for f in compose.yaml ferrofed.toml registry.toml; do
   curl -LO "https://github.com/FerroHEALTH/FerroFED/releases/latest/download/$f"
 done
 # edit ferrofed.toml and registry.toml; put credential files in secrets/
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 \
+  -out secrets/signing-key.pem
 docker compose up --wait
 ```
 

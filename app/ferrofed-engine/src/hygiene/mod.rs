@@ -24,6 +24,13 @@
 //! so it cannot carry an identifier, and a short all-hex identifier can occur
 //! inside it by chance, which would refuse a valid request.
 //!
+//! The [`conveyance::HEADER`] is read by its claims, since the token encodes
+//! them: every claim that comes from the caller's credential is searched as
+//! it is before encoding ([`Outbound::conveyed`]), and a request whose caller
+//! claims carry a withheld identifier is refused like any other header, never
+//! sent with the claim masked. The gateway's `iss`, the node's `aud` and the
+//! minted `iat`, `exp` and `jti` come from no request, as the minted id does.
+//!
 //! A single-node route forwards a client request, so the gate also decides
 //! which parts of it travel at all, from the parameters the matched ITS-REST
 //! operation declares (`openehr-its`'s `routes::lookup`): the client headers
@@ -46,6 +53,9 @@ use openehr_query::printer::escape_string;
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
+use crate::onward::conveyance;
+
+pub(crate) mod decode;
 pub mod mask;
 
 /// The client headers a single-node route never forwards, whatever the
@@ -208,17 +218,21 @@ impl Withheld {
                 }
                 None => in_aql(request.aql),
             };
+            let carries =
+                |text: &str| text.contains(value) || decode::percent_decoded(text).contains(value);
             if aql_carries {
                 Some(Part::Aql)
             } else if request.paging.iter().any(|number| number.contains(value)) {
                 Some(Part::Paging)
             } else if carried_in_target(request.url, request.composed, value) {
                 Some(Part::Url)
+            } else if request.conveyed.iter().any(|claim| carries(claim)) {
+                Some(Part::Header(conveyance::HEADER))
             } else {
                 request
                     .headers
                     .iter()
-                    .find(|(_, text)| text.contains(value) || percent_decoded(text).contains(value))
+                    .find(|(_, text)| carries(text))
                     .map(|(name, _)| Part::Header(name))
             }
         })
@@ -249,8 +263,14 @@ pub struct Outbound<'a> {
     /// The node's own `ehr_id` segment the gateway composed into the path.
     pub composed: Composed<'a>,
     /// The headers the gateway adds, by name, other than the minted
-    /// `X-Request-Id`.
+    /// `X-Request-Id` and the [`conveyance::HEADER`].
     pub headers: &'a [(&'static str, &'a str)],
+    /// Every claim of the [`conveyance::HEADER`] that comes from the
+    /// caller's credential ([`Conveyance::carried`]), each read as it is
+    /// before the token encodes it.
+    ///
+    /// [`Conveyance::carried`]: crate::onward::conveyance::Conveyance::carried
+    pub conveyed: &'a [&'a str],
 }
 
 /// The node's own `ehr_id` segment of a request's URL path, when the
@@ -311,7 +331,7 @@ fn carried_in_target<'a>(url: &'a Url, composed: Composed<'a>, value: &str) -> b
     }
     [before, target.as_str()]
         .into_iter()
-        .any(|text| text.contains(value) || percent_decoded(text).contains(value))
+        .any(|text| text.contains(value) || decode::percent_decoded(text).contains(value))
 }
 
 /// The two stretches of `path` the gate searches for `value`: the text
@@ -339,42 +359,11 @@ fn searched_path<'a>(path: &'a str, composed: Composed<'a>, value: &str) -> (&'a
     }
 }
 
-/// `text` with every `%XX` escape decoded, invalid UTF-8 replaced; an escape
-/// that is not two hex digits is kept as written.
-pub(crate) fn percent_decoded(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while let Some(&byte) = bytes.get(index) {
-        let escape = (byte == b'%')
-            .then(|| {
-                let high = hex(*bytes.get(index.saturating_add(1))?)?;
-                let low = hex(*bytes.get(index.saturating_add(2))?)?;
-                Some((high << 4) | low)
-            })
-            .flatten();
-        if let Some(decoded) = escape {
-            out.push(decoded);
-            index = index.saturating_add(3);
-        } else {
-            out.push(byte);
-            index = index.saturating_add(1);
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex(digit: u8) -> Option<u8> {
-    char::from(digit)
-        .to_digit(16)
-        .and_then(|value| u8::try_from(value).ok())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::LazyLock;
 
-    use super::{Composed, Outbound, Part, Withheld, percent_decoded};
+    use super::{Composed, Outbound, Part, Withheld};
     use openehr_its::rest::routes::{Lookup, RouteMatch, lookup};
     use secrecy::SecretString;
     use url::Url;
@@ -405,6 +394,24 @@ mod tests {
             url,
             composed: Composed::default(),
             headers,
+            conveyed: &[],
+        }
+    }
+
+    // conformance: CP-26
+    #[test]
+    fn the_identifier_in_a_conveyed_claim_names_the_conveyance_header() {
+        for claim in ["O'Sentinel-4711", "urn:x:O%27Sentinel-4711"] {
+            let conveyed = ["user/aql-*.s", claim];
+            let outbound = Outbound {
+                conveyed: &conveyed,
+                ..request("SELECT 1", &QUERY_URL, &[])
+            };
+            assert_eq!(
+                Some(Part::Header(super::conveyance::HEADER)),
+                withheld().found_in(&outbound),
+                "{claim}"
+            );
         }
     }
 
@@ -729,10 +736,5 @@ mod tests {
             Err(super::UnlistedParameter { position: 1 }),
             super::forwarded_query(&by_subject, "subject%5Fnamespace=x")
         );
-    }
-
-    #[test]
-    fn percent_decoding_keeps_a_broken_escape() {
-        assert_eq!("a'b%zz%4", percent_decoded("a%27b%zz%4"));
     }
 }

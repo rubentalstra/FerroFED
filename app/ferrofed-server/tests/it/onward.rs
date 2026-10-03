@@ -23,7 +23,7 @@ use axum::body::Body;
 use ferrofed_engine::dispatch::reported::UNAUTHENTICATED;
 use ferrofed_server::config::Config;
 use ferrofed_server::config::error::Error as ConfigError;
-use ferrofed_server::federation::Federation;
+use ferrofed_server::federation::{Federation, FederationError};
 use ferrofed_server::state::AppState;
 use ferrofed_server::telemetry::{Rendering, subscriber};
 use ferrofed_testkit::mock::Server;
@@ -232,20 +232,29 @@ async fn options_declares_the_jwks_uri_and_validates_against_the_schema() -> Tes
     Ok(())
 }
 
-/// A gateway with no signing keys declares no `auth` and publishes no set.
+/// A gateway with no signing keys cannot sign the caller's identity for a
+/// node, so it federates nothing (§13.1, N24, N25), and it publishes no
+/// set.
 #[tokio::test]
-async fn a_gateway_without_keys_declares_no_jwks() -> TestResult {
+async fn a_gateway_without_keys_federates_nothing_and_publishes_no_jwks() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let app = gateway(
+    let unsigned = gateway(
         dir.path(),
         "http://127.0.0.1:9/a",
         "http://127.0.0.1:9/b",
         "",
-    )?;
-    let (status, text) = call(app.clone(), Request::options("/").body(Body::empty())?).await?;
-    assert_eq!(StatusCode::OK, status, "{text}");
-    let body: OptionsRoot = serde_json::from_str(&text)?;
-    assert!(body.federation.auth.is_none(), "{text}");
+    );
+    let Err(refused) = unsigned else {
+        return Err("a federating gateway without [signing] was built".into());
+    };
+    assert!(
+        matches!(
+            refused.downcast_ref::<FederationError>(),
+            Some(FederationError::Unsigned)
+        ),
+        "{refused}"
+    );
+    let app = ferrofed_server::router(Arc::new(AppState::default()), &settings_with_room());
     let (status, _) = call(
         app,
         Request::get("/.well-known/jwks.json").body(Body::empty())?,

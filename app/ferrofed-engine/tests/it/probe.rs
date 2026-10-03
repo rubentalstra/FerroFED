@@ -73,6 +73,7 @@ async fn probed(
         per_node: until,
         overall: until,
         request_id: OutboundId::mint(),
+        conveyance: crate::conveyed::conveyance(),
     };
     Ok(probe::ask_all(&clients, &endpoints, &probe).await?)
 }

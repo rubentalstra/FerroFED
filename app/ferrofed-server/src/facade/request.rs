@@ -17,6 +17,7 @@ use std::time::Instant;
 use axum::response::Response;
 use ferrofed_engine::declared;
 use ferrofed_engine::fanout::Completion;
+use ferrofed_engine::onward::conveyance::Conveyance;
 use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_registry::id::EndpointId;
 use http::HeaderMap;
@@ -39,6 +40,9 @@ pub(crate) struct Arrived<'a> {
     pub(crate) request_id: &'a str,
     /// The gateway's id for the request, the one every node receives.
     pub(crate) outbound: OutboundId,
+    /// Whom the request is on behalf of, conveyed to every node it reaches
+    /// (§13.1, N24).
+    pub(crate) conveyance: &'a Conveyance,
     /// When the request arrived, the instant the overall budget runs from.
     pub(crate) started: Instant,
 }

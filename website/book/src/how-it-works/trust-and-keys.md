@@ -10,12 +10,11 @@ gateway authenticates onward to each node, and the client's identity
 travels with every request (§13.1, N24, N25, CP-16, CP-17).
 
 Client authentication
-([#80](https://github.com/FerroHEALTH/FerroFED/issues/80)) and OAuth 2.0 to
+([#80](https://github.com/FerroHEALTH/FerroFED/issues/80)), OAuth 2.0 to
 each node with the gateway's own key
-([#81](https://github.com/FerroHEALTH/FerroFED/issues/81)) run today. The
-caller's identity conveyed to each node is planned for v0.0.8
-([#82](https://github.com/FerroHEALTH/FerroFED/issues/82)); the diagrams draw
-it dashed.
+([#81](https://github.com/FerroHEALTH/FerroFED/issues/81)) and the caller's
+identity conveyed to each node
+([#82](https://github.com/FerroHEALTH/FerroFED/issues/82)) run today.
 
 ## The gate
 
@@ -35,23 +34,13 @@ flowchart TB
 
 A caller's `Authorization` header never reaches a node. A proxy that
 authenticates callers itself uses the explicit edge mode, signing an
-assertion the gate verifies.|"HTTPS"| proxy["Your reverse proxy:<br/>TLS, caller authentication"]
-    proxy -->|"HTTP, no caller<br/>check at the gateway"| gw["FerroFED gateway"]
-    gw -->|"bearer or Basic,<br/>per endpoint"| node["Node A"]
-    gw -->|"bearer, Basic<br/>or none"| pix["PIX Manager"]
-```
-
-Run the gateway where only clients you trust reach it: in a closed network,
-or behind a reverse proxy that authenticates each caller
-([What FerroFED runs beside](../operate/deployment-shape.md#authentication)).
-A caller's `Authorization` header never reaches a node. Each credential is a
-file named by a `_file` key, sent only to its own endpoint.
+assertion the gate verifies. Each onward credential is a file named by a
+`_file` key, sent only to its own endpoint.
 
 ## Two trust relationships
 
 ```mermaid
 flowchart TB
-    classDef planned stroke-dasharray: 6 4
     as["Callers' authorization servers<br/>one signing key each"]
     subgraph gwbox["FerroFED gateway"]
         trust["Trust list<br/>of issuers"]
@@ -135,12 +124,24 @@ token exchange (RFC 8693), the issued token can carry the caller as the
 delegating subject.
 
 **Telling the node who asks** ([#82](https://github.com/FerroHEALTH/FerroFED/issues/82),
-N24). Every request to a node carries `openEHR-federation-client`, a JWS
-that lives 60 seconds at most, addressed to that node's endpoint. It names
-the verified caller and its issuer, the caller's organisation, the purpose
-of use and the caller's scopes. It never carries a patient identifier
-(N33). The specification leaves end-user conveyance open (§13.1), so the
-header and its claims are FerroFED's own.
+N24, §12.4). Every request to a node carries `openEHR-federation-client`: a
+query, a routed read or write, a definition request, the ask-all probe and
+the read of an EHR by subject alike. It is a JWS signed ES384 with the
+gateway key, typed `openehr-federation-client+jwt`, that lives 60 seconds,
+addressed (`aud`) to that node's endpoint id. It names the verified caller
+(`sub`) and its issuer (`iss_upstream`), how the gateway verified it
+(`verified_by`, `edge` for an identity the edge asserted), the caller's
+organisation, the purpose of use and the caller's scopes as granted. It
+never carries a patient identifier (N33): the outbound gate reads every
+caller claim, and a request whose claims would carry the identifier the
+query was resolved on is refused before it is sent. A request that reaches
+the dispatcher with no verified caller is a `500`, with nothing sent. The
+gateway's own requests for its operator, the admission check and the
+redistribution of a held stored query, name the gateway itself as `sub`.
+The specification leaves end-user conveyance open (§13.1), so the header
+and its claims are FerroFED's own; a node verifies it as
+[Client authentication](../operate/authentication.md#verifying-it-at-the-node)
+describes.
 
 ## The caller's token is never forwarded
 

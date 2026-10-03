@@ -44,6 +44,7 @@ use ferrofed_engine::dispatch::{Contact, DispatchOptions, NodeClient};
 use ferrofed_engine::fanout::TIMEOUT_POLICY;
 use ferrofed_engine::forward::{ForwardError, Forwarded, HeldRequest};
 use ferrofed_engine::hygiene::Withheld;
+use ferrofed_engine::onward::conveyance::Conveyance;
 use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_registry::id::EndpointId;
 use ferrofed_registry::snapshot::{Endpoint, EndpointStatus, RegistrySnapshot};
@@ -205,7 +206,8 @@ pub(crate) enum Asked<R> {
 }
 
 /// Sends one request to each of `targets` at once through `call`, within
-/// `budget`, under the gateway's `outbound` id, and returns what became of
+/// `budget`, under the gateway's `outbound` id and conveying `conveyance`,
+/// and returns what became of
 /// each with the gateway's measurement of its request in milliseconds, in
 /// the order of `targets`.
 ///
@@ -220,7 +222,7 @@ pub(crate) enum Asked<R> {
 pub(crate) async fn each<R, F, Fut>(
     federation: &Federation,
     targets: &[&Endpoint],
-    (budget, outbound): (&Deadlines, OutboundId),
+    (budget, outbound, conveyance): (&Deadlines, OutboundId, &Conveyance),
     logged: &str,
     call: F,
 ) -> Result<Vec<(Asked<R>, u64)>, Unfinished>
@@ -229,7 +231,8 @@ where
     Fut: Future<Output = R> + Send + 'static,
     R: Send + 'static,
 {
-    let options = DispatchOptions::new(budget.per_node()).with_request_id(outbound);
+    let options =
+        DispatchOptions::new(budget.per_node(), conveyance.clone()).with_request_id(outbound);
     let until = tokio::time::Instant::from_std(budget.overall());
     let mut tasks = JoinSet::new();
     let mut sent: Vec<Option<(Asked<R>, u64)>> = targets.iter().map(|_| None).collect();
@@ -347,7 +350,7 @@ async fn fan_out(
     let sent = each(
         federation,
         &targets,
-        (&budget, arrived.outbound),
+        (&budget, arrived.outbound, &arrived.conveyance),
         logged,
         |client, options| {
             let request = request.clone();

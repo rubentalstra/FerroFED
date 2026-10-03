@@ -33,6 +33,7 @@ impl<T: Transport> NodeClient<T> {
         // value is an OutboundId, minted with no client input, in which a short
         // all-hex identifier can occur by chance.
         let headers: [(&'static str, &str); 0] = [];
+        let conveyed = options.conveyance().carried();
         let outbound = Outbound {
             aql: query.aql(),
             scope: query.scope.as_deref(),
@@ -40,6 +41,7 @@ impl<T: Transport> NodeClient<T> {
             url: &url,
             composed: Composed::default(),
             headers: &headers,
+            conveyed: &conveyed,
         };
         match options.withheld.found_in(&outbound) {
             Some(part) => Err(DispatchError::Withheld {

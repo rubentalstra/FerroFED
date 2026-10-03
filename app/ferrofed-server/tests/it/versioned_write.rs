@@ -21,13 +21,16 @@ use std::error::Error;
 
 use axum::Router;
 use axum::body::Body;
+use ferrofed_engine::onward::conveyance;
 use ferrofed_testkit::mock::Server;
 use http::{Method, Request, StatusCode, header};
 use wiremock::ResponseTemplate;
 
-use crate::facade::{EHR_A, EHR_B, PATIENT, body, gateway, node_answering, post, registry};
+use crate::facade::{
+    CONVEYED, EHR_A, EHR_B, PATIENT, body, gateway, node_answering, post, registry,
+};
 use crate::path_ehr_id::{answer, probe_at};
-use crate::support::{asked, error_body, mount, send};
+use crate::support::{asked, error_body, mount, searched_claims, send};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -113,13 +116,19 @@ fn composition() -> String {
 }
 
 /// The request target and every header `server` received, without the
-/// bodies: what the gateway composes for a node (§5.4.1, N33).
+/// bodies: what the gateway composes for a node (§5.4.1, N33), the
+/// gateway's own `openEHR-federation-client` token read as its claims.
 pub(crate) async fn outside_bodies(server: &Server) -> Result<String, Box<dyn Error>> {
     let requests = server.received_requests().await.ok_or("recording is on")?;
     let mut text = String::new();
     for request in requests {
         text.push_str(request.url.as_str());
         for (name, value) in &request.headers {
+            if name.as_str().eq_ignore_ascii_case(conveyance::HEADER) {
+                text.push_str(CONVEYED);
+                text.push_str(&searched_claims(value.to_str()?)?);
+                continue;
+            }
             text.push_str(name.as_str());
             text.push_str(&String::from_utf8_lossy(value.as_bytes()));
         }

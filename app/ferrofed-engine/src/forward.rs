@@ -18,7 +18,9 @@
 //! carries those headers, composed once, so a route that reads them before
 //! sending sends the same ones. The
 //! endpoint's onward credentials set `Authorization`, and the request's
-//! minted [`OutboundId`](crate::outbound_id::OutboundId) sets `X-Request-Id`.
+//! minted [`OutboundId`](crate::outbound_id::OutboundId) sets `X-Request-Id`,
+//! and the caller's identity, signed for the node, sets
+//! [`openEHR-federation-client`](crate::onward::conveyance::HEADER).
 //!
 //! The answer keeps its status, its body bytes, `Location` and `ETag`; only
 //! the hop-by-hop fields are removed (RFC 9110 §7.6.1). A node's `404` or
@@ -31,8 +33,9 @@ use std::fmt;
 
 use crate::declared::{self, Refusal};
 use crate::dispatch::reported;
-use crate::dispatch::{DispatchOptions, NodeClient};
+use crate::dispatch::{DispatchOptions, NodeClient, OptionsError};
 use crate::hygiene::{self, Composed, Outbound, Part, UnlistedParameter};
+use crate::onward::conveyance::ConveyanceError;
 use ferrofed_registry::id::EndpointId;
 use http::header::{CONNECTION, CONTENT_LENGTH, TE, TRAILER, TRANSFER_ENCODING, UPGRADE};
 use http::{HeaderMap, HeaderName, Method, StatusCode};
@@ -166,6 +169,16 @@ pub enum ForwardError {
         /// What the client runtime reported.
         #[source]
         source: Box<ClientError>,
+    },
+    /// The caller's identity could not be signed for the node, so nothing
+    /// was sent (§13.1, N24).
+    #[error("the caller's identity could not be conveyed to endpoint {endpoint}")]
+    Conveyance {
+        /// The endpoint.
+        endpoint: EndpointId,
+        /// Why it could not be signed.
+        #[source]
+        source: ConveyanceError,
     },
     /// The deadline passed before the request left the gateway, so nothing
     /// was sent and the node was never asked (§11.5).
@@ -363,10 +376,16 @@ impl<T: Transport> NodeClient<T> {
         }
         outgoing.headers_mut().extend(headers);
         let call = options
-            .call_options()
-            .map_err(|source| ForwardError::Compose {
-                endpoint: self.endpoint().clone(),
-                source: Box::new(source),
+            .call_options(self.endpoint())
+            .map_err(|error| match error {
+                OptionsError::Conveyance(source) => ForwardError::Conveyance {
+                    endpoint: self.endpoint().clone(),
+                    source,
+                },
+                OptionsError::Client(source) => ForwardError::Compose {
+                    endpoint: self.endpoint().clone(),
+                    source: Box::new(source),
+                },
             })?;
         outgoing.apply_options(&call);
         if !body.is_empty() {
@@ -395,8 +414,9 @@ impl<T: Transport> NodeClient<T> {
         }
     }
 
-    /// The outbound gate over a forwarded request: its URL and every header
-    /// `operation` declares that the request carries (§5.4.1, N33).
+    /// The outbound gate over a forwarded request: its URL, the caller claims
+    /// it conveys, and every header `operation` declares that the request
+    /// carries (§5.4.1, N33).
     ///
     /// Those are all the headers [`hygiene::forwarded_headers`] admits. The
     /// minted `X-Request-Id` is exempt as in every node request
@@ -437,6 +457,7 @@ impl<T: Transport> NodeClient<T> {
             .iter()
             .map(|(name, value)| (*name, value.as_str()))
             .collect();
+        let conveyed = options.conveyance().carried();
         let ehr_prefix = format!("{}/ehr/", base.path().trim_end_matches('/'));
         let segment = options
             .composed_ehr_id()
@@ -451,6 +472,7 @@ impl<T: Transport> NodeClient<T> {
                 ehr_segment: segment.as_deref(),
             },
             headers: &headers,
+            conveyed: &conveyed,
         };
         match withheld.found_in(&outbound) {
             Some(part) => Err(ForwardError::Withheld {

@@ -71,9 +71,12 @@ authentication guards the rest of the surface and never this route. A PIX Manage
 bearer token or a user and password, or none where the transport
 authenticates the gateway ([Identity resolution](identity.md)).
 
-Planned for v0.0.8 (§13): the client's
-identity conveyed on every request to a node
-([#82](https://github.com/FerroHEALTH/FerroFED/issues/82)).
+Every request to a node also carries the verified caller in an
+`openEHR-federation-client` token the gateway signs with its own key (§13.1,
+N24, [#82](https://github.com/FerroHEALTH/FerroFED/issues/82)), so
+`[signing]` is required on every federating gateway, and every node that
+verifies the token needs the same JWK Set location
+([What a node is told about the caller](authentication.md#what-a-node-is-told-about-the-caller)).
 
 ## What the gateway keeps
 

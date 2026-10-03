@@ -53,6 +53,7 @@ fn routed<'a>(
             ehr_segment: composed.then_some(EHR_ID),
         },
         headers,
+        conveyed: &[],
     }
 }
 

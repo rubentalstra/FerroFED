@@ -20,8 +20,10 @@ fn rendered(code: ExitCode) -> String {
 }
 
 /// Runs the real binary with `args` and a configuration file holding `toml`,
-/// with the suite's `[auth]` added when `toml` names none.
+/// with the suite's `[auth]` added when `toml` names none, and its
+/// `[signing]` when `toml` configures a registry and names none.
 pub(crate) fn binary(args: &[&str], toml: &str) -> Result<Output, Box<dyn StdError>> {
+    let toml = crate::support::signed(toml);
     let mut file = tempfile::NamedTempFile::new()?;
     file.write_all(toml.as_bytes())?;
     if !toml.contains("[auth") {
@@ -189,7 +191,9 @@ fn config_check_refuses_a_creating_system_mapping_to_an_undeclared_endpoint()
 
 /// The compose quickstart's configuration and registry document pass `config
 /// check` together, so its four members, their credentials and the static
-/// cross-reference rows the seed script reads agree with one another.
+/// cross-reference rows the seed script reads agree with one another. The
+/// suite's key stands in for the one `scripts/quickstart/signing-key.sh`
+/// writes before the first `docker compose up`.
 #[test]
 #[expect(
     clippy::panic_in_result_fn,
@@ -205,6 +209,10 @@ fn the_quickstart_configuration_passes_config_check() -> Result<(), Box<dyn StdE
         .env(
             "FERROFED__REGISTRY__DOCUMENT",
             quickstart.join("registry.toml"),
+        )
+        .env(
+            "FERROFED__SIGNING__KEY_FILE",
+            crate::support::signing_key_file(),
         )
         .output()?;
     assert_eq!(

@@ -80,7 +80,7 @@ fn settings(
          per_node_timeout_ms = 2000\noverall_timeout_ms = 3000\n{federation}\n\n\
          [stored_queries]\nbackend = \"files\"\npath = {definitions}\n{rows}"
     );
-    Ok(Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?)
+    Ok(Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?)
 }
 
 /// A gateway over two mock members whose registry reads `definitions`.

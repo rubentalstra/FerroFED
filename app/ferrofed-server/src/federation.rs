@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ferrofed_engine::dispatch::{NodeClients, SetupError};
 use ferrofed_engine::fanout::Budget;
+use ferrofed_engine::onward::conveyance::Signer;
 use ferrofed_identity::binding::{IdentityChange, ResolutionBindings};
 use ferrofed_identity::consent::ConsentPrefilter;
 use ferrofed_identity::dev::DevCrossRefError;
@@ -66,6 +67,7 @@ pub struct Federation {
     template_fan_out: bool,
     stored_query_fan_out: bool,
     signing: Option<SigningSettings>,
+    signer: Option<Arc<Signer>>,
 }
 
 /// What the process learns while it serves, which a registry reload carries
@@ -200,6 +202,13 @@ pub enum FederationError {
         /// The credentials section.
         section: String,
     },
+    /// A registry is configured, but `[signing]` is not: every request to a
+    /// node conveys the caller's identity, signed with that key (§13.1, N24,
+    /// N25).
+    #[error(
+        "set [signing] when registry.document is set: every request to a node carries the caller's identity, signed with that key (§13.1, N24)"
+    )]
+    Unsigned,
     /// The node clients could not be built.
     #[error("the node clients could not be built")]
     Clients(#[source] SetupError),
@@ -342,6 +351,7 @@ impl Federation {
         let transport = ReqwestTransport::with_timeout(settings.federation.budget.overall())
             .map_err(|source| FederationError::Transport(Box::new(source)))?;
         let credentials = crate::onward::onward_credentials(settings, &transport)?;
+        let signer = Arc::new(crate::conveyed::signer(settings, &id)?);
         let clients = NodeClients::from_snapshot(&snapshot, &transport, &credentials)
             .map_err(FederationError::Clients)?;
         let mut context = Context::new(targeting(selection))
@@ -377,6 +387,7 @@ impl Federation {
             template_fan_out: settings.federation.fan_out_template_upload,
             stored_query_fan_out: settings.federation.fan_out_stored_queries,
             signing: settings.signing.clone(),
+            signer: Some(signer),
         };
         options::describe(&federation, false).map_err(FederationError::Describe)?;
         Ok(Some(federation))
@@ -422,6 +433,7 @@ impl Federation {
             template_fan_out: crate::config::Federation::default().fan_out_template_upload,
             stored_query_fan_out: crate::config::Federation::default().fan_out_stored_queries,
             signing: None,
+            signer: None,
         }
     }
 
@@ -440,6 +452,20 @@ impl Federation {
     #[must_use]
     pub fn signing(&self) -> Option<&SigningSettings> {
         self.signing.as_ref()
+    }
+
+    /// The signer of what every request to a node conveys about its caller
+    /// ([`crate::conveyed`]; §13.1, N24).
+    #[must_use]
+    pub fn signer(&self) -> Option<&Arc<Signer>> {
+        self.signer.as_ref()
+    }
+
+    /// This federation, conveying each caller signed by `signer`.
+    #[must_use]
+    pub fn with_signer(mut self, signer: Arc<Signer>) -> Self {
+        self.signer = Some(signer);
+        self
     }
 
     /// This federation, offering best-effort completion when `offered` is

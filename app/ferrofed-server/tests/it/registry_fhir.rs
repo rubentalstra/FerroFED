@@ -115,7 +115,8 @@ fn federation(dir: &Path, document: &str, format: &str) -> Result<Federation, Bo
         "profile = \"development\"\n\n[registry]\ndocument = {path}\nformat = \"{format}\"\n\n[federation]\nper_node_timeout_ms = 2000\noverall_timeout_ms = 3000\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{}",
         crossref(&[("node-a", EHR_A), ("node-b", EHR_B)])
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     Ok(Federation::load(&settings)?.ok_or("a registry is configured")?)
 }
 

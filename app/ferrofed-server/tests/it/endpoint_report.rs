@@ -101,7 +101,15 @@ async fn directed(
     let transport = ReqwestTransport::with_timeout(Duration::from_secs(10))?;
     let clients = NodeClients::from_snapshot(snapshot, &transport, &BTreeMap::new())?;
     let budget = Budget::new(Duration::from_secs(5), Duration::from_secs(8))?;
-    Ok(fan_out(&clients, snapshot, targets.plan, budget, None).await?)
+    let conveyance = crate::support::conveyance()?;
+    Ok(fan_out(
+        &clients,
+        snapshot,
+        targets.plan,
+        budget,
+        (&conveyance, None),
+    )
+    .await?)
 }
 
 /// The answer as the federated `RESULT_SET` body, validated against the

@@ -68,7 +68,8 @@ fn overtaken(a: &Server, b: &Server) -> Result<(Router, Arc<AppState>), Box<dyn 
         Context::new(Targeting::AskAll),
         Budget::new(Duration::from_nanos(1), Duration::from_nanos(1))?,
     )
-    .with_template_fan_out(true);
+    .with_template_fan_out(true)
+    .with_signer(crate::support::signer("example-federation")?);
     let state = Arc::new(AppState::with_federation(federation));
     let app = ferrofed_server::router(Arc::clone(&state), &settings_with_room());
     Ok((app, state))

@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use axum::Json;
 use axum::response::{IntoResponse, Response};
 use ferrofed_engine::fanout::{Budget, Completion, FanOutError, FederatedAnswer, fan_out_within};
+use ferrofed_engine::onward::conveyance::Conveyance;
 use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_identity::binding::SessionKey;
 use http::{HeaderMap, HeaderValue, StatusCode};
@@ -42,6 +43,7 @@ pub(crate) async fn answer(
         headers,
         request_id,
         outbound,
+        conveyance,
         started,
     } = arrived;
     // TODO(#412): the authenticated client session the resolution bindings belong to.
@@ -69,6 +71,7 @@ pub(crate) async fn answer(
         budget,
         started,
         outbound,
+        conveyance,
         session: session.as_ref(),
     };
     match federate(federation, query).await {
@@ -213,6 +216,8 @@ struct Query<'a> {
     /// The gateway's id of the request: the one every node receives and the
     /// security events record, never the client's.
     outbound: OutboundId,
+    /// Whom the request is on behalf of, conveyed to every node (§13.1, N24).
+    conveyance: &'a Conveyance,
     /// The client session the resolution bindings belong to.
     session: Option<&'a SessionKey>,
 }
@@ -282,6 +287,7 @@ async fn federate(
         budget,
         started,
         outbound,
+        conveyance,
         session,
     } = query;
     let logged = outbound.to_string();
@@ -297,6 +303,7 @@ async fn federate(
         budget,
         started,
         outbound,
+        conveyance,
     };
     let routed = scoped::routed(federation, &analysis, named.as_ref(), scope).await?;
     let selection = plan::Selection::of(named.as_ref(), routed.map(|owner| owner.endpoint.id()));
@@ -333,7 +340,7 @@ async fn federate(
         plan,
         budget,
         started,
-        Some(outbound),
+        (conveyance, Some(outbound)),
     )
     .await
     .map_err(|error| {

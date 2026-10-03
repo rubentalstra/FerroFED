@@ -319,7 +319,7 @@ async fn the_one_outbound_id_reaches_every_node() -> TestResult {
         &snapshot,
         plan_for(&["node-a-pub", "node-b-pub"])?,
         budget(2_000, 5_000)?,
-        Some(outbound),
+        (&crate::conveyed::conveyance(), Some(outbound)),
     )
     .await?;
     for server in [&a, &b] {
@@ -345,7 +345,7 @@ async fn a_plan_naming_an_endpoint_the_registry_lacks_is_refused() -> TestResult
         &snapshot,
         plan_for(&["node-x-pub"])?,
         budget(2_000, 5_000)?,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await;
     assert!(

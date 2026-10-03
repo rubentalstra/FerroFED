@@ -247,7 +247,10 @@ mod tests {
                 (&endpoint, &BTreeSet::new()),
                 error,
                 0,
-                &DispatchOptions::new(std::time::Instant::now()),
+                &DispatchOptions::new(
+                    std::time::Instant::now(),
+                    crate::onward::conveyance::tests::conveyance(),
+                ),
             ),
             Err(DispatchError::Compose { .. })
         ))

@@ -416,7 +416,8 @@ async fn store(
         Ok(Ok(Insertion::Stored)) => match distributed {
             Some(selected) => {
                 let sent = (Registry::Stored, &selected);
-                distribution::distribute(federation, &copy, sent, (arrived.outbound, started)).await
+                let sent_as = (arrived.outbound, &arrived.conveyance, started);
+                distribution::distribute(federation, &copy, sent, sent_as).await
             }
             None => stored_answer(version),
         },
@@ -512,7 +513,15 @@ async fn redistributed(
         .ok_or_else(|| Refused::fixed(Code::StoredQueryUnknown))?;
     distribution::distributable(held.aql(), &logged)?;
     let sent = (Registry::Held, &selected);
-    distribution::distribute(federation, &held, sent, (outbound, started)).await
+    let conveyance = crate::conveyed::gateway(federation).map_err(|unconveyed| {
+        tracing::error!(
+            error = %unconveyed,
+            request_id = logged,
+            "the held stored query could not convey the gateway, so nothing was sent"
+        );
+        Refused::fixed(Code::Internal)
+    })?;
+    distribution::distribute(federation, &held, sent, (outbound, &conveyance, started)).await
 }
 
 /// The `200` of a stored definition, with `Location` relative to the request
@@ -624,6 +633,7 @@ async fn execute(
         headers: arrived.headers,
         request_id: arrived.request_id,
         outbound: arrived.outbound,
+        conveyance: &arrived.conveyance,
         started,
     };
     let submitted = Submitted::Stored {

@@ -6,8 +6,9 @@
 //! as openEHR ITS-REST 1.1.0 names them.
 //!
 //! Both go through the generated `EhrClient` of `openehr-its`'s
-//! `rest-client`, with the endpoint's onward credentials, the call's deadline
-//! and the gateway's minted `X-Request-Id`, and both pass the outbound gate
+//! `rest-client`, with the endpoint's onward credentials, the call's deadline,
+//! the caller's identity signed for the node and the gateway's minted
+//! `X-Request-Id`, and both pass the outbound gate
 //! first: the URL and every header the gateway sets are read against the
 //! identifiers the options withhold (§5.4.1, N33). The `EHR_STATUS` a create
 //! carries is a write body, which the gate never reads (§5.4 scope note).
@@ -21,8 +22,9 @@ use openehr_its::rest::generated::ehr::{EhrCreateParams, EhrGetByIdParams};
 use openehr_rm::v1_2::ehr::ehr::Ehr;
 use openehr_rm::v1_2::ehr::ehr_status::EhrStatus;
 
-use crate::dispatch::{DispatchOptions, NodeClient};
+use crate::dispatch::{DispatchOptions, NodeClient, OptionsError};
 use crate::hygiene::{Composed, Outbound, Part};
+use crate::onward::conveyance::ConveyanceError;
 use ferrofed_registry::id::EndpointId;
 use http::StatusCode;
 
@@ -54,6 +56,16 @@ pub enum EhrCallError {
         /// What the client runtime reported.
         #[source]
         source: Box<ClientError>,
+    },
+    /// The caller's identity could not be signed for the node, so nothing
+    /// was sent (§13.1, N24).
+    #[error("the caller's identity could not be conveyed to endpoint {endpoint}")]
+    Conveyance {
+        /// The endpoint.
+        endpoint: EndpointId,
+        /// Why it could not be signed.
+        #[source]
+        source: ConveyanceError,
     },
     /// The node was sent the request and did not answer before the deadline.
     #[error("endpoint {endpoint} did not answer before the deadline")]
@@ -137,8 +149,8 @@ impl<T: Transport> NodeClient<T> {
         };
         self.gate_ehr("/ehr", &[("Prefer", PREFER_MINIMAL)], options)?;
         let call = options
-            .call_options()
-            .map_err(|source| self.ehr_failure(source))?;
+            .call_options(self.endpoint())
+            .map_err(|error| self.options_failure(error))?;
         let answer = EhrClient::new(self.client())
             .with_options(call)
             .ehr_create(&params, Some(status))
@@ -192,8 +204,8 @@ impl<T: Transport> NodeClient<T> {
         );
         self.gate_ehr(&path, &[], options)?;
         let call = options
-            .call_options()
-            .map_err(|source| self.ehr_failure(source))?;
+            .call_options(self.endpoint())
+            .map_err(|error| self.options_failure(error))?;
         let answer = EhrClient::new(self.client())
             .with_options(call)
             .ehr_get_by_id(&params)
@@ -220,6 +232,7 @@ impl<T: Transport> NodeClient<T> {
         let base = self.base();
         let mut url = base.clone();
         url.set_path(&format!("{}{path}", base.path().trim_end_matches('/')));
+        let conveyed = options.conveyance().carried();
         let outbound = Outbound {
             aql: "",
             scope: None,
@@ -227,6 +240,7 @@ impl<T: Transport> NodeClient<T> {
             url: &url,
             composed: Composed::default(),
             headers,
+            conveyed: &conveyed,
         };
         match withheld.found_in(&outbound) {
             Some(part) => Err(EhrCallError::Withheld {
@@ -243,6 +257,18 @@ impl<T: Transport> NodeClient<T> {
             endpoint: self.endpoint().clone(),
             status,
             body,
+        }
+    }
+
+    /// The error for call options that could not be made, so nothing was
+    /// sent.
+    fn options_failure(&self, error: OptionsError) -> EhrCallError {
+        match error {
+            OptionsError::Conveyance(source) => EhrCallError::Conveyance {
+                endpoint: self.endpoint().clone(),
+                source,
+            },
+            OptionsError::Client(source) => self.ehr_failure(source),
         }
     }
 
@@ -292,7 +318,7 @@ fn from_etag(etag: &str) -> Option<String> {
 fn from_location(location: &str) -> Option<String> {
     let url = url::Url::parse(location.trim()).ok()?;
     let segment = url.path_segments()?.rfind(|segment| !segment.is_empty())?;
-    let decoded = crate::hygiene::percent_decoded(segment);
+    let decoded = crate::hygiene::decode::percent_decoded(segment);
     (!decoded.is_empty()).then_some(decoded)
 }
 

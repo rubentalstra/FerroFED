@@ -92,7 +92,10 @@ fn within(budget: Duration) -> Result<DispatchOptions, Box<dyn Error>> {
     let deadline = Instant::now()
         .checked_add(budget)
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline))
+    Ok(DispatchOptions::new(
+        deadline,
+        crate::conveyed::conveyance(),
+    ))
 }
 
 /// A mock node answering `POST {prefix}/v1/query/aql` with `answer`.
@@ -390,7 +393,7 @@ async fn a_deadline_already_passed_is_a_time_out_and_sends_nothing() -> TestResu
     let reply = client
         .query(
             &NodeQuery::new(NODE_AQL),
-            &DispatchOptions::new(Instant::now()),
+            &DispatchOptions::new(Instant::now(), crate::conveyed::conveyance()),
         )
         .await?;
     assert_eq!(reply.status(), EndpointStatus::TimeOut);
@@ -509,14 +512,15 @@ async fn the_request_id_a_node_receives_is_the_minted_outbound_id_byte_for_byte(
 
 /// Every header name a node request may carry, lowercase, with where its
 /// value comes from: the inventory of `ferrofed_engine::outbound_id`.
-const INVENTORY: [&str; 7] = [
-    "accept",          // the client runtime's default
-    "accept-encoding", // the HTTP engine, from its decompression features
-    "authorization",   // the endpoint's configured onward credential
-    "content-length",  // the HTTP engine, from the composed body
-    "content-type",    // the client runtime, for the JSON body
-    "host",            // the HTTP engine, from the registry URL
-    "x-request-id",    // the minted outbound id
+const INVENTORY: [&str; 8] = [
+    "accept",                    // the client runtime's default
+    "accept-encoding",           // the HTTP engine, from its decompression features
+    "authorization",             // the endpoint's configured onward credential
+    "content-length",            // the HTTP engine, from the composed body
+    "content-type",              // the client runtime, for the JSON body
+    "host",                      // the HTTP engine, from the registry URL
+    "openehr-federation-client", // the caller's identity, signed for the node
+    "x-request-id",              // the minted outbound id
 ];
 
 // conformance: CP-26

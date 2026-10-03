@@ -772,9 +772,12 @@ gateway, and one token would unlock every member that accepts its issuer (RFC
 obtained fails that node as `node-error`, with the token endpoint's error; the
 gateway never dispatches unauthenticated.
 
-**What a node is told about the caller** (decision A21). Every dispatched and
-routed request carries `openEHR-federation-client`, a JWS signed with the
-gateway key from the same JWKS. Its claims: `iss` (the gateway), `aud` (the
+**What a node is told about the caller** (decision A21, built with #82).
+Every dispatched and routed request carries `openEHR-federation-client`, a
+JWS signed with the gateway key from the same JWKS: the query fan-out, every
+routed read and write, the definition routes and the template fan-out, the
+stored-query calls, the ask-all probe and the read of an EHR by subject. Its
+claims: `iss` (the gateway), `aud` (the
 node's `endpoint_id`), `exp` of 60 s or less, `jti`, `sub` and `iss_upstream`
 (the verified caller), the caller organisation, `purpose_of_use` (the IHE IUA
 claim name, HL7 v3 PurposeOfUse coding) and `scope` (the caller's scopes as
@@ -784,7 +787,37 @@ as candidates without mandating either, so the header and its claim set are
 FerroFED's own. Production federations do the same: the US XCPD networks
 convey a signed assertion with the end user, the organisation and a purpose of
 use on every cross-gateway request (Sequoia NHIN Authorization Framework v3.0;
-eHealth Exchange Authorization Framework v4; TEFCA QTF v2).
+eHealth Exchange Authorization Framework v4; TEFCA QTF v2). The details
+decided with #82:
+
+- **the token:** `typ` `openehr-federation-client+jwt` (RFC 8725 §3.11), so
+  a node cannot take it for an access token or a client assertion; signed
+  for each node separately, so `aud` and `jti` differ per node;
+- **`iss`:** the `client_id` of the endpoint's OAuth 2.0 grant, the `iss` of
+  the gateway's client assertions at that node, so a node can check it
+  against the `client_id` of the access token on the same request; for an
+  endpoint without a grant, the federation id `OPTIONS {base}/` declares;
+- **the caller claims:** `subject_organization_id` names the organisation
+  (the IUA claim), each purpose of use is a `{system, code}` object, and
+  `verified_by` (`signature`, `introspection` or `edge`) records how the
+  gateway verified the caller, so an identity the edge asserted is marked as
+  such; the caller's `client_id` and token are not conveyed;
+- **the gateway's own requests:** the admission check and the operator's
+  redistribution of a held stored query have no client caller, and name the
+  gateway itself as `sub` with no caller claim;
+- **no caller, no dispatch:** a request that reaches the dispatcher without a
+  verified caller is a `500` with nothing sent, and `DispatchOptions` cannot
+  be built without a conveyance, so no request to a node leaves without the
+  header;
+- **the outbound gate:** it reads every caller claim (`sub`, `iss_upstream`,
+  the organisation, each purpose of use and `scope`) against the identifiers
+  the request withholds, and a match refuses the request with nothing sent,
+  as for any header the gateway adds (§5.4.1, N33); `iss`, `aud`, `iat`,
+  `exp` and `jti` come from no request and are not read, as the minted
+  `X-Request-Id` is not;
+- **`[signing]` is required** whenever `registry.document` is set: a
+  federating gateway without a key cannot convey the caller, so it refuses to
+  start.
 
 **Purpose of use** (decision A24). Required by default: a request whose token
 carries no purpose of use (an IUA `purpose_of_use` claim, or RAR

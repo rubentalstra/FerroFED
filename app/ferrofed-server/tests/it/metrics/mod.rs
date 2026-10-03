@@ -196,7 +196,9 @@ impl Metered {
         let text = format!(
             "{top}\n\n[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = {per_node_ms}\noverall_timeout_ms = {overall_ms}\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{tables}"
         );
-        let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+        let settings =
+            Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?
+                .resolve()?;
         let state = Arc::new(AppState::build(&settings)?);
         let app = ferrofed_server::router(Arc::clone(&state), &settings_with_room());
         Ok(Self { state, app })
