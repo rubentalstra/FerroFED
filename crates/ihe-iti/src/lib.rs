@@ -6,7 +6,7 @@
 //!
 //! - `pixm`: Patient Identifier Cross-reference for Mobile, ITI-83.
 //! - `pdqm`: Patient Demographics Query for Mobile, ITI-78.
-//! - `mcsd`: Mobile Care Services Discovery, ITI-90.
+//! - `mcsd`: Mobile Care Services Discovery, ITI-90 and ITI-91.
 //! - `pmir`: Patient Master Identity Registry, ITI-93 and ITI-94.
 //! - `xcpd`: Cross-Community Patient Discovery, ITI-55, the one profile on
 //!   SOAP 1.2 with HL7 v3 and SAML XUA.
@@ -18,7 +18,7 @@
 
 #[cfg(feature = "mcsd")]
 pub mod mcsd;
-#[cfg(any(feature = "pixm", feature = "pdqm"))]
+#[cfg(any(feature = "pixm", feature = "pdqm", feature = "mcsd"))]
 pub mod outcome;
 #[cfg(feature = "pdqm")]
 pub mod pdqm;
@@ -28,7 +28,7 @@ pub mod pixm;
 pub mod pmir;
 #[cfg(any(feature = "pixm", feature = "pdqm", feature = "mcsd", feature = "xcpd"))]
 mod redact;
-#[cfg(any(feature = "pixm", feature = "pdqm"))]
+#[cfg(any(feature = "pixm", feature = "pdqm", feature = "mcsd"))]
 mod search;
 #[cfg(feature = "xcpd")]
 pub mod xcpd;

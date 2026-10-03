@@ -373,6 +373,10 @@ pub enum Error {
     /// host that is not loopback.
     #[error(transparent)]
     TrustAnchor(#[from] TrustAnchorError),
+    /// Both a registry document and a directory are configured, and the
+    /// registry has one source.
+    #[error("set registry.document or [registry.mcsd], not both: the registry has one source")]
+    TwoRegistrySources,
     /// The localizer's budget does not end before the overall budget, so the
     /// localizer could leave no time to resolve and ask the members (§11.5,
     /// §14.1).

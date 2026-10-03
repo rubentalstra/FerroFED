@@ -60,6 +60,7 @@ flowchart TB
     proxy -->|"HTTP"| gw["FerroFED gateway"]
     cfg["ferrofed.toml, registry,<br/>secret files"] -->|"start, SIGHUP"| gw
     gw -->|"ITI-83"| pix["PIX Manager"]
+    gw -->|"ITI-90, ITI-91"| mcsd["mCSD directory,<br/>when the registry is read from one"]
     gw -->|"ITS-REST"| nodes["Member CDRs"]
     gw -->|"definitions"| store[("redb, PostgreSQL<br/>or files")]
     gw -->|"serves"| admin["Admin listener<br/>/metrics, /admin"]
@@ -74,6 +75,10 @@ flowchart TB
 - **The configuration** is your reviewed files. The registry reloads on
   `SIGHUP` with no restart, and every credential is a file named by a
   `_file` key ([Configuration](../operate/configuration.md)).
+- **The mCSD directory**, when you read the registry from one instead of a
+  document, is asked with ITI-90 at start and with ITI-91 every refresh
+  interval, off the clinical path
+  ([The registry](../operate/registry.md#the-registry-read-from-an-mcsd-directory)).
 - **The admin listener** is a second listener for your operators, off unless
   `[metrics] listen` is set and on loopback unless you allow otherwise
   ([Metrics](../operate/metrics.md)).

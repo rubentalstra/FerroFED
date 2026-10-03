@@ -30,13 +30,15 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use ferrofed_engine::dispatch::SetupError;
 use ferrofed_identity::directory::error::FhirFormError;
+use ferrofed_identity::directory::mcsd::DirectoryReadError;
 use ferrofed_registry::error::LoadError;
 use ferrofed_registry::id::{EndpointId, NodeId};
+use ferrofed_registry::snapshot::RegistrySnapshot;
 
 use crate::config::settings::Settings;
 use crate::config::transport::{self, CleartextError, ProtectedSite};
 use crate::config::{CONFIG_PATH_ENV, Config};
-use crate::federation::{FederationError, Reconciled};
+use crate::federation::{Federation, FederationError, Reconciled, read_registry};
 use crate::metrics::ReloadResult;
 use crate::state::AppState;
 
@@ -44,7 +46,10 @@ use crate::state::AppState;
 ///
 /// `registry` is the registry document, its path and its form, `credentials`
 /// the outbound credentials of each endpoint, `dev` and `pixm` the
-/// resolver, and `xcpd` the localizer, both of which name the members.
+/// resolver, and `xcpd` the localizer, both of which name the members. A
+/// registry read from a care services directory changes with the directory,
+/// never with a reload: a reload rebuilds the federation over the registry in
+/// place, and a change to `[registry.mcsd]` takes a restart.
 pub const RELOADABLE: [&str; 5] = ["registry", "credentials", "dev", "pixm", "xcpd"];
 
 /// Reloads the registry the server started with.
@@ -55,7 +60,7 @@ pub struct Reloader {
     config: Option<PathBuf>,
     boot: Settings,
     state: Arc<AppState>,
-    serial: Mutex<()>,
+    serial: Mutex<Option<Settings>>,
 }
 
 /// What an applied reload changed.
@@ -99,8 +104,11 @@ pub enum ReloadError {
         #[source]
         source: Box<FederationError>,
     },
-    /// `registry.document` was set or unset since the process started.
-    #[error("registry.document was set or unset, which takes a restart")]
+    /// The registry's source, `registry.document` or `[registry.mcsd]`, was
+    /// set, unset or changed since the process started.
+    #[error(
+        "the registry source (registry.document or [registry.mcsd]) was set, unset or changed, which takes a restart"
+    )]
     RegistryPresence,
     /// `profile` differs from the profile the process started with. Every
     /// decision the development profile admits reads the boot profile, so a
@@ -146,32 +154,69 @@ impl Reloader {
             config,
             boot,
             state,
-            serial: Mutex::new(()),
+            serial: Mutex::new(None),
         }
     }
 
     /// Reloads the registry, logs the outcome, and returns it.
     ///
-    /// The signal handler calls this; one reload runs at a time.
+    /// The signal handler calls this; one reload runs at a time. A registry
+    /// read from a care services directory stays the one in place, and the
+    /// federation is rebuilt over it with the reloaded sections.
     ///
     /// # Errors
     /// Returns a [`ReloadError`] when the configuration or the registry does
-    /// not load, or `registry.document` was set or unset; the running
-    /// registry then stays in place.
+    /// not load, or the registry's source was set, unset or changed between
+    /// a document and a directory; the running registry then stays in place.
     pub fn reload(&self) -> Result<Applied, ReloadError> {
-        let serial = self.serial.lock().unwrap_or_else(PoisonError::into_inner);
-        let outcome = self.apply();
-        drop(serial);
+        let mut applied = self.serial.lock().unwrap_or_else(PoisonError::into_inner);
+        let outcome = self.apply().map(|(outcome, effective)| {
+            *applied = Some(effective);
+            outcome
+        });
+        drop(applied);
         self.log(&outcome);
         outcome
     }
 
-    /// Reads the configuration again and swaps in the registry it describes.
-    fn apply(&self) -> Result<Applied, ReloadError> {
+    /// Puts the registry a refresh of the care services directory read in
+    /// place of the running one, checked as a reload is, with the settings
+    /// the last reload applied; logs the outcome and counts it.
+    ///
+    /// # Errors
+    /// Returns [`ReloadError::Federation`] when the federation cannot be built
+    /// over `snapshot`; the running registry then stays in place.
+    pub fn directory_changed(&self, snapshot: RegistrySnapshot) -> Result<Applied, ReloadError> {
+        let applied = self.serial.lock().unwrap_or_else(PoisonError::into_inner);
+        let settings = applied.as_ref().unwrap_or(&self.boot);
+        let outcome = match self.state.federation() {
+            None => Err(ReloadError::RegistryPresence),
+            Some(running) => self.swap(&running, settings, Some(Ok(snapshot)), Vec::new()),
+        };
+        drop(applied);
+        self.log(&outcome);
+        outcome
+    }
+
+    /// Logs and counts a refresh of the care services directory whose
+    /// registry was refused before a federation could be built over it, and
+    /// returns the refusal; the running registry stays in place.
+    pub fn directory_refused(&self, refusal: FederationError) -> ReloadError {
+        let error = ReloadError::Federation {
+            document: None,
+            source: Box::new(refusal),
+        };
+        self.log_refusal(&error);
+        error
+    }
+
+    /// Reads the configuration again and swaps in the registry it describes,
+    /// returning what changed and the settings now in effect.
+    fn apply(&self) -> Result<(Applied, Settings), ReloadError> {
         let fresh = Config::load(self.config.as_deref())
             .and_then(|config| config.resolve())
             .map_err(ReloadError::Config)?;
-        if fresh.registry_document.is_some() != self.boot.registry_document.is_some() {
+        if source_kind(&fresh) != source_kind(&self.boot) {
             return Err(ReloadError::RegistryPresence);
         }
         // NOTE: no specification governs this: our own design; a reload under
@@ -182,15 +227,38 @@ impl Reloader {
         let needs_restart = needs_restart(&self.boot, &fresh);
         let effective = effective(&self.boot, fresh);
         let Some(running) = self.state.federation() else {
-            return Ok(Applied {
-                needs_restart,
-                ..Applied::default()
-            });
+            return Ok((
+                Applied {
+                    needs_restart,
+                    ..Applied::default()
+                },
+                effective,
+            ));
         };
+        // NOTE: no specification governs this: our own design; the directory, not
+        // the configuration, changes a directory's registry, so a reload keeps it.
+        let document = if effective.registry_directory.is_some() {
+            Some(Ok(running.snapshot().clone()))
+        } else {
+            read_registry(&effective)
+        };
+        let applied = self.swap(&running, &effective, document, needs_restart)?;
+        Ok((applied, effective))
+    }
+
+    /// Builds the federation `settings` describe over `document` in place of
+    /// `running`, and swaps it in.
+    fn swap(
+        &self,
+        running: &Arc<Federation>,
+        settings: &Settings,
+        document: Option<Result<RegistrySnapshot, FederationError>>,
+        needs_restart: Vec<&'static str>,
+    ) -> Result<Applied, ReloadError> {
         let next = running
-            .reloaded(&effective)
+            .reloaded_over(settings, document)
             .map_err(|source| ReloadError::Federation {
-                document: effective.registry_document.clone(),
+                document: settings.registry_document.clone(),
                 source: Box::new(source),
             })?
             .ok_or(ReloadError::RegistryPresence)?;
@@ -252,16 +320,19 @@ impl Reloader {
                     );
                 }
             }
-            Err(error) => {
-                self.state.metrics().reloaded(ReloadResult::Refused);
-                tracing::error!(
-                    class = error.class(),
-                    config = self.source().map(|path| path.display().to_string()),
-                    document = error.document().map(|path| path.display().to_string()),
-                    "registry reload refused, the running registry stays; `ferrofed config check` names the fault"
-                );
-            }
+            Err(error) => self.log_refusal(error),
         }
+    }
+
+    /// Logs a refusal by its class, never a value, and counts it.
+    fn log_refusal(&self, error: &ReloadError) {
+        self.state.metrics().reloaded(ReloadResult::Refused);
+        tracing::error!(
+            class = error.class(),
+            config = self.source().map(|path| path.display().to_string()),
+            document = error.document().map(|path| path.display().to_string()),
+            "registry reload refused, the running registry stays; `ferrofed config check` names the fault"
+        );
     }
 
     /// The configuration file a reload reads, when one is named.
@@ -270,6 +341,15 @@ impl Reloader {
             .clone()
             .or_else(|| std::env::var_os(CONFIG_PATH_ENV).map(PathBuf::from))
     }
+}
+
+/// Where `settings` read the registry from: a document, a directory, or
+/// nowhere.
+fn source_kind(settings: &Settings) -> (bool, bool) {
+    (
+        settings.registry_document.is_some(),
+        settings.registry_directory.is_some(),
+    )
 }
 
 impl std::fmt::Debug for Reloader {
@@ -318,6 +398,7 @@ fn effective(boot: &Settings, fresh: Settings) -> Settings {
         telemetry: boot.telemetry.clone(),
         registry_document: fresh.registry_document,
         registry_format: fresh.registry_format,
+        registry_directory: fresh.registry_directory,
         federation: boot.federation.clone(),
         credentials: fresh.credentials,
         dev: fresh.dev,
@@ -351,6 +432,14 @@ fn signing_changed(boot: &Settings, fresh: &Settings) -> bool {
 fn needs_restart(boot: &Settings, fresh: &Settings) -> Vec<&'static str> {
     let (was, now) = (&boot.federation, &fresh.federation);
     [
+        (
+            "registry.mcsd",
+            match (&boot.registry_directory, &fresh.registry_directory) {
+                (Some(was), Some(now)) => !was.same_as(now),
+                (None, None) => false,
+                (Some(_), None) | (None, Some(_)) => true,
+            },
+        ),
         ("signing", signing_changed(boot, fresh)),
         ("server.listen", boot.server.listen != fresh.server.listen),
         (
@@ -446,6 +535,13 @@ fn federation_class(error: &FederationError) -> &'static str {
             FhirFormError::Read { .. } => "registry-unreadable",
             _ => "registry-invalid",
         },
+        FederationError::Directory(source) => match **source {
+            DirectoryReadError::Exchange(_) => "registry-unreadable",
+            _ => "registry-invalid",
+        },
+        FederationError::DirectorySource(_) | FederationError::DirectoryRuntime(_) => {
+            "registry-directory"
+        }
         FederationError::DevWithoutRegistry
         | FederationError::DevTable(_)
         | FederationError::DevCrossRef(_) => "dev-cross-reference",

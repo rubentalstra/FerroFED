@@ -52,6 +52,7 @@ pub mod body;
 pub mod cli;
 pub mod config;
 mod development;
+pub mod directory;
 pub mod error;
 pub mod facade;
 pub mod federation;
@@ -84,6 +85,7 @@ use axum::{Extension, Json, Router};
 use clap::Parser;
 use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_identity::dev::Profile;
+use ferrofed_registry::snapshot::RegistrySnapshot;
 use http::{HeaderMap, Method, StatusCode, Uri};
 use openehr_its::rest::routes::{self, Lookup};
 use tokio::net::TcpListener;
@@ -95,7 +97,8 @@ use tower_http::timeout::TimeoutLayer;
 use crate::cli::{AdmissionCommand, Cli, Command, ConfigCommand};
 use crate::config::Config;
 use crate::config::settings::{ServerSettings, Settings};
-use crate::federation::Federation;
+use crate::directory::DirectoryRegistry;
+use crate::federation::{Federation, FederationError};
 use crate::health::lifecycle::{Lifecycle, drain_on};
 use crate::state::AppState;
 
@@ -157,7 +160,7 @@ where
         Command::Config {
             command: ConfigCommand::Check,
         } => match AppState::check(&settings).and_then(|cleartext| {
-            state::admits_callers(&settings, settings.registry_document.is_some())
+            state::admits_callers(&settings, settings.federates())
                 .map(|()| cleartext)
         }) {
             Ok(cleartext) => config_checked(&cleartext),
@@ -187,7 +190,7 @@ fn serve_job(settings: Settings, config: Option<PathBuf>) -> ExitCode {
     let stdout_is_terminal = std::io::stdout().is_terminal();
     let no_color = std::env::var_os("NO_COLOR");
     let format = settings.telemetry.format;
-    let document = federation::read_registry(&settings);
+    let (document, directory) = read_source(&settings);
     if banner::prints(format, stdout_is_terminal) {
         let described = document.as_ref().map(Result::as_ref);
         // NOTE: no specification governs this: our own design; a document that
@@ -230,25 +233,49 @@ fn serve_job(settings: Settings, config: Option<PathBuf>) -> ExitCode {
     };
     // NOTE: no specification governs this: our own design; the OTLP push is a
     // tonic client, which is built inside the runtime it will run on.
-    if let Err(error) = state::admits_callers(&settings, settings.registry_document.is_some()) {
+    if let Err(error) = state::admits_callers(&settings, settings.federates()) {
         tracing::error!(error = chain(&error), "cannot start");
         return ExitCode::from(EXIT_CONFIG);
     }
     let entered = runtime.enter();
     let state = match AppState::build_read(&settings, document) {
-        Ok(state) => Arc::new(state),
+        Ok(state) => Arc::new(match &directory {
+            Some(directory) => state.watching(Arc::clone(directory)),
+            None => state,
+        }),
         Err(error) => {
             tracing::error!(error = chain(&error), "cannot start");
             return ExitCode::from(EXIT_CONFIG);
         }
     };
     drop(entered);
-    match serve_command(&runtime, settings, &state, config) {
+    match serve_command(&runtime, settings, &state, config, directory) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(error = format!("{error:#}"), "cannot serve");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The registry's first read and, when it comes from a care services
+/// directory, the directory the gateway then keeps it in step with.
+///
+/// A document is read as [`federation::read_registry`] reads it; a directory
+/// is read once here, so the banner, the build and the refreshes share one
+/// read.
+fn read_source(
+    settings: &Settings,
+) -> (
+    Option<Result<RegistrySnapshot, FederationError>>,
+    Option<Arc<DirectoryRegistry>>,
+) {
+    match &settings.registry_directory {
+        None => (federation::read_registry(settings), None),
+        Some(directory) => match DirectoryRegistry::open(directory) {
+            Ok((registry, snapshot)) => (Some(Ok(snapshot)), Some(Arc::new(registry))),
+            Err(error) => (Some(Err(error)), None),
+        },
     }
 }
 
@@ -381,6 +408,7 @@ fn serve_command(
     settings: Settings,
     state: &Arc<AppState>,
     config: Option<PathBuf>,
+    directory: Option<Arc<DirectoryRegistry>>,
 ) -> anyhow::Result<()> {
     let server = settings.server.clone();
     let admin = admin::listener(&settings.metrics, state);
@@ -412,11 +440,11 @@ fn serve_command(
                 }
             });
         }
-        tokio::spawn(reload::on_hangup(Arc::new(reload::Reloader::new(
-            config,
-            settings,
-            Arc::clone(state),
-        ))));
+        let reloader = Arc::new(reload::Reloader::new(config, settings, Arc::clone(state)));
+        if let Some(directory) = directory {
+            tokio::spawn(directory.keep_in_step(Arc::clone(&reloader)));
+        }
+        tokio::spawn(reload::on_hangup(reloader));
         let app = router(Arc::clone(state), &server);
         state.lifecycle().booted();
         serve(listener, app, &server, state.lifecycle().clone())
@@ -588,14 +616,15 @@ async fn readiness(State(state): State<Arc<AppState>>) -> Response {
 }
 
 /// `GET /health/dependencies`: the last observed state of each member
-/// endpoint and of the resolver, always `200`.
+/// endpoint, of the resolver, of the consent pre-filter and of the care
+/// services directory, always `200`.
 async fn dependencies(State(state): State<Arc<AppState>>) -> Json<health::dependencies::Report> {
-    Json(
-        state
-            .federation()
-            .map(|federation| federation.dependencies().report())
-            .unwrap_or_default(),
-    )
+    let mut report = state
+        .federation()
+        .map(|federation| federation.dependencies().report())
+        .unwrap_or_default();
+    report.directory = state.directory().map(|directory| directory.observed());
+    Json(report)
 }
 
 /// Every path no route serves.

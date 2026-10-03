@@ -152,6 +152,50 @@ pub struct Registry {
     pub document: Option<PathBuf>,
     /// The form the document is written in.
     pub format: RegistryFormat,
+    /// The mCSD care services directory the registry is read from and kept
+    /// in step with (`[registry.mcsd]`, §15.1, Annex A.5), in place of a
+    /// document.
+    pub mcsd: Option<McsdDirectory>,
+}
+
+impl Registry {
+    /// Whether a registry is configured, as a document or as a directory.
+    #[must_use]
+    pub fn configured(&self) -> bool {
+        self.document.is_some() || self.mcsd.is_some()
+    }
+}
+
+/// The mCSD care services directory the registry is read from.
+///
+/// Its `Organization`s and `Endpoint`s are read with ITI-90 and checked as
+/// the registry document in FHIR form is; every `refresh_interval_s` the
+/// changes since the last read are asked for with ITI-91 and checked again
+/// before they replace the running registry.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McsdDirectory {
+    /// The directory's FHIR base URL, `http` or `https`, with no user name
+    /// or password.
+    pub url: SecretUrl,
+    /// How the gateway authenticates to the directory, when the transport
+    /// does not: a bearer token or basic credentials.
+    pub credentials: Option<Credentials>,
+    /// How often the changes are asked for, in seconds.
+    pub refresh_interval_s: u64,
+    /// How long one page of an answer may take, in milliseconds.
+    pub timeout_ms: u64,
+}
+
+impl Default for McsdDirectory {
+    fn default() -> Self {
+        Self {
+            url: SecretUrl::default(),
+            credentials: None,
+            refresh_interval_s: 300,
+            timeout_ms: 10_000,
+        }
+    }
 }
 
 /// The form of the registry document.

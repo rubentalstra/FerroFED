@@ -119,7 +119,7 @@ The sections, and the page that covers each:
 | `profile` | `production`, the default, or `development`, the only profile that admits `[dev]` | [Identity resolution](identity.md#the-development-cross-reference-dev) |
 | `[server]`, `[telemetry]`, `[credentials]`, `[signing]` | the listener, the console, the onward credentials, the signing keys | this page |
 | `[metrics]` | the admin listener and the OTLP push | [Metrics](metrics.md) |
-| `[registry]` | the registry document and its form | [The registry](registry.md) |
+| `[registry]` | the registry document and its form, or the mCSD directory of `[registry.mcsd]` the registry is read from | [The registry](registry.md) |
 | `[pixm]`, `[dev]` | the cross-reference | [Identity resolution](identity.md) |
 | `[xcpd]` | the XCPD localizer | [XCPD localization](identity.md#xcpd-localization-xcpd) |
 | `[federation]` | the federation id, node selection, budgets, completeness, paging, aggregates and the optional facilities | [The registry](registry.md), [Queries and API areas](queries-and-areas.md) |
@@ -358,7 +358,7 @@ Every route is under the [base path](#the-base-path); with the default `/`,
 | `OPTIONS {base}/` | the federation's self-description (§7a.2) |
 | `GET {base}/health` | `200` while the process is up |
 | `GET {base}/health/readiness` | `200` while the gateway serves and its own subsystems (the configuration, the registry, the outbound clients, the stored-query store) are up; `503` before boot completes and from the moment `SIGTERM` or `SIGINT` arrives, with the phase and each subsystem's state; no member node and no identity source gates it |
-| `GET {base}/health/dependencies` | always `200`, with the state the gateway last observed of each member endpoint and of the resolver: `up`, `failing`, `down` or `unknown`; endpoint ids and states only |
+| `GET {base}/health/dependencies` | always `200`, with the state the gateway last observed of each member endpoint, of the resolver, of the consent pre-filter and of the mCSD directory: `up`, `failing`, `down` or `unknown`; endpoint ids and states only |
 | `GET` and `POST {base}/v1/query/aql` | the federated `RESULT_SET`, the `GET` form reading the request from its query string; `501` when no registry is configured |
 | `{base}/v1/ehr/{ehr_id}` and below | routed to the one node that owns the `ehr_id`, found in the order of §12.5.1: the `openEHR-federation-endpoint` header, the session's resolution binding, the `ehr_id` index, then for a read the ask-all probe; answered as that node answered; `501` when no registry is configured |
 | `GET {base}/v1/ehr?subject_id=…&subject_namespace=…` | the subject resolved at the gateway, and `GET /v1/ehr/{ehr_id}` sent to the one member that holds it, at that member's own base, answered as that node answered; `501` when no registry is configured |

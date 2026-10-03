@@ -14,7 +14,7 @@ No specification governs health probes: our own design.
 |---|---|---|
 | `GET {base}/health` | `200` while the process serves; it checks nothing else | liveness |
 | `GET {base}/health/readiness` | `200` while the gateway serves and its own subsystems are up; `503` before boot completes and from the moment `SIGTERM` or `SIGINT` arrives | readiness, startup, the image `HEALTHCHECK` |
-| `GET {base}/health/dependencies` | always `200`, with the state the gateway last observed of each member endpoint, of the resolver, of the consent pre-filter and of the localizer | monitoring, never a probe |
+| `GET {base}/health/dependencies` | always `200`, with the state the gateway last observed of each member endpoint, of the resolver, of the consent pre-filter, of the localizer and of the mCSD directory | monitoring, never a probe |
 
 Readiness reports the gateway's own subsystems by name: the configuration,
 the registry and the outbound clients when a registry is configured, and the
@@ -66,8 +66,13 @@ patient, is `up`, a failure answered below `500` is `up`, a `5xx` is
 `failing`, an XCPD exchange whose audit message could not be recorded is
 `failing`, and no answer, a silent localizer past its budget included, is
 `down`. It is absent when no localizer is configured
-([Node selection](registry.md#node-selection)). The body names endpoint ids
-and states only, never a URL, a credential or a body.
+([Node selection](registry.md#node-selection)). A refresh of the mCSD directory the registry
+is read from updates `directory`: an answer is `up`, a `5xx` or an answer
+that breaks ITI-90 or ITI-91 is `failing`, and no answer is `down`. It is
+absent when the registry is a document
+([The registry](registry.md#the-registry-read-from-an-mcsd-directory)). The
+body names endpoint ids and states only, never a URL, a credential or a
+body.
 
 ## `ferrofed healthcheck`
 

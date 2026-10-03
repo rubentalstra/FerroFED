@@ -26,6 +26,7 @@ use ferrofed_identity::consent::ConsentPrefilter;
 use ferrofed_identity::dev::DevCrossRefError;
 use ferrofed_identity::directory;
 use ferrofed_identity::directory::error::FhirFormError;
+use ferrofed_identity::directory::mcsd::{DirectoryConfigError, DirectoryReadError};
 use ferrofed_identity::patient::{IdentifierNamespace, PatientRefError};
 use ferrofed_identity::pixm::{ManagerConfig, PixAuth, PixmConfigError, PixmResolver};
 use ferrofed_identity::resolver::Resolver;
@@ -123,6 +124,17 @@ pub enum FederationError {
         #[source]
         source: Box<FhirFormError>,
     },
+    /// The registry could not be read from the care services directory, or
+    /// its content is no registry the gateway admits (§15.1, §15.2, N19, N20).
+    #[error("the registry could not be read from the care services directory")]
+    Directory(#[source] Box<DirectoryReadError>),
+    /// The care services directory of `[registry.mcsd]` cannot be asked.
+    #[error("the care services directory of [registry.mcsd] cannot be asked")]
+    DirectorySource(#[source] DirectoryConfigError),
+    /// The runtime a read of the directory outside the server runs on could
+    /// not be built.
+    #[error("the runtime for reading the care services directory could not be built")]
+    DirectoryRuntime(#[source] std::io::Error),
     /// The `[dev]` table is set but no registry document is, so its rows name
     /// members that do not exist.
     #[error("the [dev] cross-reference needs registry.document, whose members its rows name")]
@@ -260,11 +272,25 @@ impl Federation {
     /// Returns the [`FederationError`] [`Federation::load`] returns for the
     /// same settings.
     pub fn reloaded(&self, settings: &Settings) -> Result<Option<Self>, FederationError> {
-        let mut next = Self::assemble(
-            settings,
-            read_registry(settings),
-            Some(Arc::clone(&self.observed)),
-        )?;
+        self.reloaded_over(settings, read_registry(settings))
+    }
+
+    /// Builds the federation `settings` describe after a registry reload over
+    /// `document`, the registry already read: a refresh of the care services
+    /// directory, or the running registry when only the other sections
+    /// changed.
+    ///
+    /// The checks and what carries over are [`Federation::reloaded`]'s.
+    ///
+    /// # Errors
+    /// Returns the [`FederationError`] [`Federation::load_read`] returns for
+    /// the same settings and document.
+    pub fn reloaded_over(
+        &self,
+        settings: &Settings,
+        document: Option<Result<RegistrySnapshot, FederationError>>,
+    ) -> Result<Option<Self>, FederationError> {
+        let mut next = Self::assemble(settings, document, Some(Arc::clone(&self.observed)))?;
         if let (Some(next), Some(instruments)) = (next.as_mut(), self.requests.instruments()) {
             next.requests.metered(instruments.clone());
         }
@@ -671,14 +697,22 @@ impl std::fmt::Debug for Federation {
     }
 }
 
-/// Reads and checks the registry document `settings` name, or returns `None`
-/// when they name none.
+/// Reads and checks the registry document or the care services directory
+/// `settings` name, or returns `None` when they name neither.
+///
+/// A directory is read with ITI-90 on a runtime of its own, so the read
+/// blocks the caller until the directory has answered or failed.
 ///
 /// The read fails with [`FederationError::Registry`] or
 /// [`FederationError::FhirRegistry`] for a document that cannot be read or
-/// refuses to load; [`Federation::load_read`] stops on that error.
+/// refuses to load, and with [`FederationError::Directory`] for a directory
+/// that cannot be read or holds no valid registry; [`Federation::load_read`]
+/// stops on that error.
 #[must_use]
 pub fn read_registry(settings: &Settings) -> Option<Result<RegistrySnapshot, FederationError>> {
+    if let Some(directory) = &settings.registry_directory {
+        return Some(crate::directory::read(directory));
+    }
     let path = settings.registry_document.as_deref()?;
     Some(read_document(path, settings.registry_format))
 }

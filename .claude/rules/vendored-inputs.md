@@ -29,6 +29,12 @@ live under `docs/specs/`, one directory per corpus, each fetched by its own
   package (CC-BY-4.0): the Consumer and Supplier capability statements, the
   Query Patient Resource Response Message and Patient profiles and the IG's
   examples, pinned by package version and tarball sha256.
+- `docs/specs/ihe-mcsd/`: the ITI-90 and ITI-91 artefacts of the IHE mCSD
+  4.0.0 FHIR package (CC-BY-4.0): the Directory, Query Client and Update
+  Client capability statements, the Organization, Endpoint and Location
+  profiles, the endpoint type code system and value sets and the IG's
+  Organization and Endpoint examples, pinned by package version and tarball
+  sha256.
 - `website/book/vendor/mermaid/`: the mermaid browser bundle and the
   mdbook-mermaid init script the book loads, fetched by
   `scripts/vendor/mdbook-mermaid-assets.sh` (MIT and MPL 2.0).

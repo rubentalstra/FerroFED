@@ -9,6 +9,7 @@
 )]
 
 mod equivalence;
+mod mcsd;
 mod refusal;
 
 use ferrofed_identity::directory::{

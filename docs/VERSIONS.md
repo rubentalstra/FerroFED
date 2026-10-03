@@ -59,7 +59,7 @@ package registry listed as latest on 2026-10-01.
 | PIXm (ITI-83, ITI-104) | `ihe.iti.pixm` | 3.1.0, vendored by #42 (the corpus table below) |
 | PDQm (ITI-78, ITI-119) | `ihe.iti.pdqm` | 3.2.0, vendored by #119 (the corpus table below) |
 | PMIR (ITI-93, ITI-94) | `ihe.iti.pmir` | 1.6.0 |
-| mCSD | `ihe.iti.mcsd` | 4.0.0 |
+| mCSD (ITI-90, ITI-91) | `ihe.iti.mcsd` | 4.0.0, vendored by #86 (the corpus table below) |
 | XCPD (ITI-55) | the IHE ITI Technical Framework, no FHIR package | Vol 2 Rev 20.1 (2024-12-12, Final Text) |
 | Netherlands Generic Functions | `fhir.nl.gf` | 0.3.0, as Annex B names it |
 
@@ -80,6 +80,7 @@ its pin from this table, and `scripts/checks/versions.sh` reads each vendored
 | openEHR AQL specification source | `openEHR/specifications-QUERY` tag `Release-1.1.0`, the AQL and AQL examples documents and the grammar | `scripts/vendor/aql.sh`, `docs/specs/aql/PROVENANCE.md` |
 | IHE PIXm FHIR package | `ihe.iti.pixm` version `3.1.0` from `packages.fhir.org`, tarball sha256 `19e2e8eaf3030ac7b4d809c5e1eeb8face02c8635318aeb6d35bc2bb889de0d0`, the ITI-83 artefacts | `scripts/vendor/ihe-pixm.sh`, `docs/specs/ihe-pixm/PROVENANCE.md` |
 | IHE PDQm FHIR package | `ihe.iti.pdqm` version `3.2.0` from `packages.fhir.org`, tarball sha256 `61e09fbee991ff7c131b6ba5474921001e07782209961f3e85cee5f3ebcaedc2`, the ITI-78 artefacts | `scripts/vendor/ihe-pdqm.sh`, `docs/specs/ihe-pdqm/PROVENANCE.md` |
+| IHE mCSD FHIR package | `ihe.iti.mcsd` version `4.0.0` from `packages.fhir.org`, tarball sha256 `933a143d7bb14c66731a32f52a084c6cb92476aca1b917db77a4640f8a5290ad`, the ITI-90 and ITI-91 artefacts | `scripts/vendor/ihe-mcsd.sh`, `docs/specs/ihe-mcsd/PROVENANCE.md` |
 
 ## openEHR model crates (crates.io)
 

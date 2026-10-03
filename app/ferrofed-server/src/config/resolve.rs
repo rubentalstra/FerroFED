@@ -21,12 +21,12 @@ use crate::base_path::BasePath;
 use crate::config::error::Error;
 use crate::config::secrets::{resolve_credentials, resolve_signing};
 use crate::config::settings::{
-    FederationSettings, LocalizationSettings, MetricsSettings, PixManagerSettings, PixmSettings,
-    Scheme, ServerSettings, Settings, TelemetrySettings,
+    DirectorySettings, FederationSettings, LocalizationSettings, MetricsSettings,
+    PixManagerSettings, PixmSettings, Scheme, ServerSettings, Settings, TelemetrySettings,
 };
 use crate::config::{
-    COMBINING_MARGIN_MS, Config, Federation, Localization, Metrics, NodeSelection, OffsetPaging,
-    Pixm, stored_queries,
+    COMBINING_MARGIN_MS, Config, Federation, Localization, McsdDirectory, Metrics, NodeSelection,
+    OffsetPaging, Pixm, stored_queries,
 };
 
 impl Config {
@@ -119,6 +119,15 @@ impl Config {
         let federation = self.resolve_federation(request_timeout)?;
         let pixm = self.pixm.as_ref().map(resolve_pixm).transpose()?;
         let xcpd = crate::config::xcpd::resolve(self)?;
+        if self.registry.document.is_some() && self.registry.mcsd.is_some() {
+            return Err(Error::TwoRegistrySources);
+        }
+        let registry_directory = self
+            .registry
+            .mcsd
+            .as_ref()
+            .map(resolve_directory)
+            .transpose()?;
         let stored_queries = stored_queries::resolve(self)?;
         let metrics = resolve_metrics(&self.metrics, listen)?;
         // NOTE: §12.7 stored-query-fanout, N44: definition fan-out is a facility
@@ -148,6 +157,7 @@ impl Config {
             },
             registry_document: self.registry.document.clone(),
             registry_format: self.registry.format,
+            registry_directory,
             federation,
             credentials,
             dev: self.dev.clone(),
@@ -173,7 +183,7 @@ impl Config {
         )?;
         // NOTE: §11.5, the budget only bounds a fan-out, so it is held below the
         // request timeout, by the combining margin, only when the gateway federates.
-        if self.registry.document.is_some()
+        if self.registry.configured()
             && request_timeout <= overall.saturating_add(Duration::from_millis(COMBINING_MARGIN_MS))
         {
             return Err(Error::Budget {
@@ -287,6 +297,53 @@ fn resolve_pixm(pixm: &Pixm) -> Result<PixmSettings, Error> {
     Ok(PixmSettings {
         managers,
         namespaces: pixm.namespaces.clone(),
+    })
+}
+
+/// Resolves `[registry.mcsd]`: an `http` or `https` base URL with no user name
+/// or password, a bearer token or basic credentials, and a positive interval
+/// and timeout.
+fn resolve_directory(directory: &McsdDirectory) -> Result<DirectorySettings, Error> {
+    let key = "registry.mcsd.url";
+    if directory.url.is_empty() {
+        return Err(Error::Missing {
+            key: key.to_owned(),
+        });
+    }
+    let url = url::Url::parse(directory.url.expose()).map_err(|source| Error::Url {
+        key: key.to_owned(),
+        source,
+    })?;
+    // NOTE: no specification governs this: our own design; as on a PIX Manager
+    // URL, a credential goes in its own section and never in the URL.
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(Error::HttpUrl {
+            key: key.to_owned(),
+        });
+    }
+    let section = String::from("registry.mcsd.credentials");
+    let credentials = directory
+        .credentials
+        .as_ref()
+        .map(|credentials| resolve_credentials(&section, credentials))
+        .transpose()?;
+    if matches!(credentials, Some(Scheme::OAuth2(_))) {
+        return Err(Error::GrantNotHere { section });
+    }
+    let refresh_interval = Duration::from_secs(directory.refresh_interval_s);
+    if refresh_interval.is_zero() {
+        return Err(Error::Zero {
+            key: String::from("registry.mcsd.refresh_interval_s"),
+        });
+    }
+    Ok(DirectorySettings {
+        url: directory.url.clone(),
+        credentials,
+        refresh_interval,
+        timeout: positive_ms("registry.mcsd.timeout_ms", directory.timeout_ms)?,
     })
 }
 

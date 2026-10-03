@@ -120,8 +120,9 @@ impl Store {
 ///
 /// [`Error::Missing`] naming `stored_queries.path` or `stored_queries.url`
 /// when the backend needs it and it is unset or empty, and naming
-/// `registry.document` when the registry is offered without the federation
-/// that executes its queries; [`Error::StoreKey`] for a key the backend does
+/// `registry.document` when the registry is offered with neither a registry
+/// document nor a directory, and so without the federation that executes
+/// its queries; [`Error::StoreKey`] for a key the backend does
 /// not read; [`Error::StoreBackendUnavailable`] for `postgres` in a build
 /// without it; [`Error::StoreUrl`] for a connection string that does not
 /// parse; and the secret errors of a `url_file`.
@@ -140,7 +141,7 @@ pub fn resolve(config: &Config) -> Result<Option<Store>, Error> {
         Backend::Files => Store::Files(path(section, backend)?),
         Backend::Postgres => Store::Postgres(url(section)?),
     };
-    if config.registry.document.is_none() {
+    if !config.registry.configured() {
         return Err(Error::Missing {
             key: String::from("registry.document"),
         });

@@ -896,7 +896,8 @@ docs/specs/federation-ref|Federation Tier reference implementation
 docs/specs/its-rest|openEHR ITS-REST OpenAPI
 docs/specs/aql|openEHR AQL specification source
 docs/specs/ihe-pixm|IHE PIXm FHIR package
-docs/specs/ihe-pdqm|IHE PDQm FHIR package"
+docs/specs/ihe-pdqm|IHE PDQm FHIR package
+docs/specs/ihe-mcsd|IHE mCSD FHIR package"
 
 agreed=0
 expected=0

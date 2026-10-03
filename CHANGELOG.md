@@ -23,6 +23,27 @@ shaping, single-node routing and the targeting mechanisms in 0.0.6.
 
 ### Added
 
+- The registry can be read from an IHE mCSD 4.0.0 care services directory
+  and kept in step with it (#86; §15.1, N21, Annex A.5). `[registry.mcsd]`
+  names the directory's FHIR base, optional bearer or basic credentials, a
+  refresh interval and a per-page timeout, in place of `registry.document`.
+  At start the gateway reads the `Organization`s and `Endpoint`s that carry
+  the registry's FHIR-form identifiers with ITI-90, and every interval it
+  asks for the changes since the last read with ITI-91 `_history?_since=`,
+  from the directory's own clock. The content passes the checks of the FHIR
+  form and of a reload: an endpoint relying on `hl7-fhir-rest` (§15.2, N19),
+  a missing managing organisation (N20) or a duplicate id or `system_id`
+  stops the start, and a refresh that breaks one is refused with the running
+  registry kept, logged and counted as a refused reload. A directory that
+  does not answer keeps the running registry and shows on
+  `GET /health/dependencies` as `directory`. `config check` reads the
+  directory too.
+- `ihe-iti` 0.0.11: the `mcsd` feature carries the ITI-90 Query Client and
+  the ITI-91 Update Client (`McsdClient`), and a replica of a directory's
+  `Organization` and `Endpoint` resources kept in step with ITI-91
+  (`Replica`). IHE mCSD 4.0.0 is vendored under `docs/specs/ihe-mcsd/` by
+  `scripts/vendor/ihe-mcsd.sh`, and the testkit carries a harness directory
+  built from the IG's examples.
 - The consent pre-filter applies to the read of an EHR by subject as it does
   to a federated query (#399; N27a, §13.2.1). A member it denies is never
   resolved and never sent a request. When it denies every member that might
