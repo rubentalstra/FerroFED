@@ -161,7 +161,13 @@ shaping, single-node routing and the targeting mechanisms in 0.0.6.
   recorder cannot accept fails the discovery closed under every
   `on_failure` policy, `ask-all` included, and shows the localizer
   `failing`.
-
+- The PIXm resolver as the localizer (#408; §14.2, N4, §14.1): under
+  `node_selection = "localized"` with `[pixm]` and no `[xcpd]`, the members
+  whose domain holds an identifier for the patient at the PIX Manager are
+  the candidates, and the resolution reuses the same ITI-83 answer, so each
+  query asks each Manager once. A Manager that fails or stays silent fails
+  the localization closed. `OPTIONS {base}/` declares
+  `localization.mode = "pixm"`.
 - Client authentication at the gateway (§13.1, N25, CP-17 inbound half,
   #80). A request to the ITS-REST surface and `OPTIONS {base}/` carries an
   RFC 9068 access token from an issuer on the `[[auth.issuer]]` trust list,
@@ -246,6 +252,13 @@ shaping, single-node routing and the targeting mechanisms in 0.0.6.
   identifier is sent to must be `https` outside the development profile,
   and a key set or introspection endpoint the gateway verifies callers
   against must be `https`, or `http` to loopback, under every profile (#402).
+- Outside the development profile, the stored-query store's PostgreSQL
+  connection string must set `sslmode=require` when it carries a password
+  to a networked host: `disable` and `prefer`, the driver's default, which
+  falls back to no TLS, are refused naming `stored_queries.url` by
+  `config check`, the start and a reload, even though the store itself
+  changes only on a restart. Under the development profile it starts and is
+  named in the banner, the log and `config check` (#416).
 
 ## [0.0.7] - 2026-10-03
 

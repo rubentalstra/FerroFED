@@ -81,7 +81,7 @@ pub struct Applied {
     pub reconciled: Reconciled,
     /// The changed settings that take effect only on a restart, by key.
     pub needs_restart: Vec<&'static str>,
-    /// The credentials that travel over plain `http`, which only the
+    /// The credentials that travel unencrypted, which only the
     /// development profile allows ([`transport::check`]).
     pub cleartext: Vec<ProtectedSite>,
 }
@@ -225,6 +225,9 @@ impl Reloader {
         if fresh.profile != self.boot.profile {
             return Err(ReloadError::Profile);
         }
+        // NOTE: no specification governs this: our own design; a setting that
+        // waits for a restart is held now, so the restart cannot stop on it.
+        transport::check(&fresh, None).map_err(ReloadError::Cleartext)?;
         let needs_restart = needs_restart(&self.boot, &fresh);
         let effective = effective(&self.boot, fresh);
         let Some(running) = self.state.federation() else {

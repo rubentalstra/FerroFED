@@ -75,7 +75,7 @@ configuration of [the quickstart](container.md#the-quickstart) prints this:
   Listen           0.0.0.0:8080
   Registry         4 members, 4 endpoints
   Stored queries   off
-  Plain http       credentials.node-a-query
+  Unencrypted      credentials.node-a-query
                    credentials.node-b-query
                    credentials.node-c-query
                    credentials.node-d-query
@@ -92,10 +92,10 @@ reads `none` when no document is set, and says the document does not load
 when it cannot be read, in which case the boot stops on the next lines with
 the reason. The development notice prints only under
 `profile = "development"`, in red on a terminal with colour and in the same
-words without it. The `Plain http` lines name, by key, each credential or
+words without it. The `Unencrypted` lines name, by key, each credential or
 patient identifier that travels unencrypted, which only the development
 profile allows
-([What must travel over https](#what-must-travel-over-https)).
+([What must travel encrypted](#what-must-travel-encrypted)).
 
 Colour follows the terminal, and an explicit `format = "pretty"` keeps it
 into a pipe. A `NO_COLOR` environment variable that is set and not empty
@@ -192,10 +192,10 @@ password in it is refused naming the key, as an endpoint URL in the registry
 document is. Its credentials go in `[pixm.manager.credentials]`, which takes
 a bearer token or a user and a password, never an `oauth2` grant.
 
-### What must travel over https
+### What must travel encrypted
 
-Every outbound URL in the configuration is held to one of two rules, by
-what it carries.
+Every outbound connection in the configuration is held to one of three
+rules, by what it carries.
 
 **Credentials and patient identifiers.** Outside `profile = "development"`,
 a URL that a configured credential or a patient identifier is sent to must
@@ -216,15 +216,24 @@ never a value. The rule covers:
 - `metrics.otlp_endpoint` when it carries a user name or a password.
 
 ```text
-ferrofed: cannot start: the url of endpoint hospital-a in registry.document is not an https URL, and credentials.hospital-a would travel over it in cleartext: outside profile = "development" a credential or a patient identifier is sent only over https
+ferrofed: cannot start: the url of endpoint hospital-a in registry.document is not an https URL, and credentials.hospital-a would travel over it in cleartext: outside profile = "development" a credential or a patient identifier is sent only encrypted
 ```
 
 A node URL no credential is sent to may stay `http`, for example a node on a
 private network whose transport a sidecar protects with mutual TLS: the
 gateway sends a node its own `ehr_id`, never the patient identifier (§5.4,
-N33). The stored-query store's PostgreSQL connection string is not an `http`
-URL, so the rule does not read it: whether that connection is encrypted is
-its own `sslmode`.
+N33).
+
+**A database password.** Outside the development profile, the stored-query
+store's PostgreSQL connection string must set `sslmode=require` when it
+carries a password and reaches its host over the network. The driver reads
+`sslmode` as `disable`, `prefer` (its default, which falls back to no TLS) or
+`require`, and refuses any other value, so `disable` and `prefer` are
+refused, naming `stored_queries.url`, by the same commands and on a reload.
+A connection with no password, or whose every host is a Unix socket and
+that names no `hostaddr`, crosses no network with a secret and may leave
+`sslmode` as it is
+([Stored queries](queries-and-areas.md#stored-queries)).
 
 Under the development profile the same configuration starts, so the
 [quickstart](container.md#the-quickstart) can reach its nodes over `http`
@@ -265,7 +274,7 @@ section is required except those two:
   anything else is refused at load.
 - `token_endpoint` is an `https` URL with no user name, password, query or
   fragment; `http` is accepted only under `profile = "development"`
-  ([What must travel over https](#what-must-travel-over-https)).
+  ([What must travel encrypted](#what-must-travel-encrypted)).
 
 The gateway caches a token until 30 seconds before the end of the lifetime
 its `expires_in` states, with one token request per endpoint at a time. A

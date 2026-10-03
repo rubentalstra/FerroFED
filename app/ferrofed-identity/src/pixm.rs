@@ -1,8 +1,12 @@
 // SPDX-FileCopyrightText: Vernum Projecten B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The PIXm resolver: the [`Resolver`] seam over ITI-83 against one or more
-//! Patient Identifier Cross-reference Managers (N3, §5.2, Annex A.1).
+//! The PIXm resolver and localizer over ITI-83.
+//!
+//! The [`Resolver`] seam runs against one or more Patient Identifier
+//! Cross-reference Managers (N3, §5.2, Annex A.1), and the [`Localizer`] over
+//! the same calls is §14.2's "demographic-registration" kind: the members
+//! whose domain holds an identifier for the patient.
 //!
 //! Each member is bound to one PIX Manager and to its `ehr_id` domain there:
 //! the assigning authority whose identifier values are that member's
@@ -15,9 +19,9 @@
 //! transaction's purpose. It travels inside `ihe_iti`'s redacting
 //! [`SourceIdentifier`]; nothing here logs it, and no error carries it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -34,6 +38,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use url::Url;
 
+use crate::localizer::{Localization, Localizer, LocalizerError};
 use crate::patient::{IdentifierNamespace, PatientRef};
 use crate::resolver::{Resolution, Resolver, ResolverError};
 
@@ -147,17 +152,23 @@ struct Manager {
     members: Vec<(NodeId, TargetSystem)>,
 }
 
-/// The [`Resolver`] over ITI-83.
+/// The [`Resolver`] and the [`Localizer`] over ITI-83.
 ///
-/// It answers [`Resolution::Resolved`] when a member's domain holds exactly
-/// one identifier that reads as an `ehr_id`, [`Resolution::Unknown`] when the
-/// Manager does not know the patient or the member's domain holds nothing,
-/// and [`Resolution::Unavailable`] for every failure, a namespace it cannot
-/// map included, so the query fails closed (§11.3 covers only an answered
-/// lookup; no specification governs this: our own design).
+/// As a resolver it answers [`Resolution::Resolved`] when a member's domain
+/// holds exactly one identifier that reads as an `ehr_id`,
+/// [`Resolution::Unknown`] when the Manager does not know the patient or the
+/// member's domain holds nothing, and [`Resolution::Unavailable`] for every
+/// failure, a namespace it cannot map included, so the query fails closed
+/// (§11.3 covers only an answered lookup; no specification governs this: our
+/// own design).
+///
+/// As a localizer it names the members whose domain holds an identifier for
+/// the patient, and the resolution of the same query reuses the answers it
+/// read, so a query asks each Manager once.
 pub struct PixmResolver {
     managers: Vec<Arc<Manager>>,
     namespaces: BTreeMap<IdentifierNamespace, String>,
+    shared: Mutex<Vec<Shared>>,
 }
 
 impl PixmResolver {
@@ -220,6 +231,7 @@ impl PixmResolver {
         Ok(Self {
             managers: built,
             namespaces,
+            shared: Mutex::new(Vec::new()),
         })
     }
 
@@ -241,6 +253,14 @@ impl fmt::Debug for PixmResolver {
         f.debug_struct("PixmResolver")
             .field("managers", &self.managers.len())
             .field("namespaces", &self.namespaces.len())
+            .field(
+                "shared",
+                &self
+                    .shared
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .len(),
+            )
             .finish()
     }
 }
@@ -270,65 +290,92 @@ fn http_client(auth: &PixAuth) -> Result<reqwest::Client, PixmConfigError> {
         .map_err(PixmConfigError::Client)
 }
 
+/// What one ITI-83 exchange said of one member.
+///
+/// It is read once per member and becomes the member's [`Resolution`] or,
+/// for localization, whether the member's domain holds the patient.
+#[derive(Debug)]
+enum Lookup {
+    /// The domain holds exactly one identifier, which is an `ehr_id`.
+    Resolved(EhrId),
+    /// The Manager does not know the patient, or the domain holds nothing.
+    Unknown,
+    /// The domain holds identifiers this resolver cannot use as the member's
+    /// `ehr_id`: one that is not an `ehr_id`, or more than one.
+    Unusable(PixmResolveError),
+    /// The exchange failed.
+    Failed(Arc<PixmError>),
+    /// The resolution budget ran out before the Manager answered.
+    TimedOut,
+    /// The Manager answered in a form this resolver does not interpret, or
+    /// the patient's namespace maps to no assigning authority.
+    Unread(PixmResolveError),
+}
+
+impl Lookup {
+    /// The member's resolution (N3, N6).
+    fn into_resolution(self) -> Resolution {
+        match self {
+            Self::Resolved(ehr_id) => Resolution::Resolved(ehr_id),
+            Self::Unknown => Resolution::Unknown,
+            Self::Unusable(error) | Self::Unread(error) => unavailable(error),
+            Self::Failed(error) => {
+                Resolution::Unavailable(ResolverError::Backend(Box::new(SharedExchange(error))))
+            }
+            Self::TimedOut => Resolution::Unavailable(ResolverError::DeadlineExceeded),
+        }
+    }
+}
+
 /// What one Manager answered, per member it was asked about.
 fn read(
     answer: Result<CrossReference, PixmError>,
     members: &[(NodeId, TargetSystem)],
-) -> Vec<(NodeId, Resolution)> {
+) -> Vec<(NodeId, Lookup)> {
     match answer {
         Ok(CrossReference::Matched(found)) => members
             .iter()
             .map(|(member, domain)| {
                 let mut in_domain = found.in_domain(domain.as_str());
-                let resolution = match (in_domain.next(), in_domain.next()) {
-                    (None, _) => Resolution::Unknown,
+                let lookup = match (in_domain.next(), in_domain.next()) {
+                    (None, _) => Lookup::Unknown,
                     (Some(identifier), None) => {
                         match EhrId::new(identifier.value().expose_secret()) {
-                            Ok(ehr_id) => Resolution::Resolved(ehr_id),
+                            Ok(ehr_id) => Lookup::Resolved(ehr_id),
                             Err(_not_an_ehr_id) => {
-                                unavailable(PixmResolveError::NotAnEhrId(member.clone()))
+                                Lookup::Unusable(PixmResolveError::NotAnEhrId(member.clone()))
                             }
                         }
                     }
-                    (Some(_), Some(_)) => unavailable(PixmResolveError::Ambiguous(member.clone())),
+                    (Some(_), Some(_)) => {
+                        Lookup::Unusable(PixmResolveError::Ambiguous(member.clone()))
+                    }
                 };
-                (member.clone(), resolution)
+                (member.clone(), lookup)
             })
             .collect(),
         Ok(CrossReference::SourceNotFound) => members
             .iter()
-            .map(|(member, _)| (member.clone(), Resolution::Unknown))
+            .map(|(member, _)| (member.clone(), Lookup::Unknown))
             .collect(),
         Ok(_) => members
             .iter()
             .map(|(member, _)| {
                 (
                     member.clone(),
-                    unavailable(PixmResolveError::UnexpectedAnswer),
+                    Lookup::Unread(PixmResolveError::UnexpectedAnswer),
                 )
             })
             .collect(),
         Err(PixmError::Timeout) => members
             .iter()
-            .map(|(member, _)| {
-                (
-                    member.clone(),
-                    Resolution::Unavailable(ResolverError::DeadlineExceeded),
-                )
-            })
+            .map(|(member, _)| (member.clone(), Lookup::TimedOut))
             .collect(),
         Err(error) => {
             let shared = Arc::new(error);
             members
                 .iter()
-                .map(|(member, _)| {
-                    (
-                        member.clone(),
-                        Resolution::Unavailable(ResolverError::Backend(Box::new(SharedExchange(
-                            Arc::clone(&shared),
-                        )))),
-                    )
-                })
+                .map(|(member, _)| (member.clone(), Lookup::Failed(Arc::clone(&shared))))
                 .collect()
         }
     }
@@ -354,39 +401,59 @@ impl std::error::Error for SharedExchange {
     }
 }
 
-#[async_trait]
-impl Resolver for PixmResolver {
-    async fn resolve(
+/// How long a localization's ITI-83 answers wait for the resolution of the
+/// same query (no specification governs this: our own design; a query
+/// resolves within its overall budget, well inside this window).
+const SHARED_WINDOW: Duration = Duration::from_secs(30);
+
+/// The most localizations whose ITI-83 answers are kept at once.
+///
+/// No specification governs this: our own design. A localization past it
+/// keeps nothing, so its resolution asks the Manager again.
+pub const SHARED_CAPACITY: usize = 1024;
+
+/// The ITI-83 answers one localization read, kept for the resolution of the
+/// same query so that it asks no Manager again (§14.2's
+/// "demographic-registration" localizer over the resolver's own call).
+///
+/// It is held in memory only, for [`SHARED_WINDOW`] at most, and consumed by
+/// the resolution that reads it; it is never logged or written anywhere.
+struct Shared {
+    namespace: IdentifierNamespace,
+    value: SecretString,
+    until: Instant,
+    lookups: BTreeMap<NodeId, Lookup>,
+}
+
+impl Shared {
+    fn is_for(&self, patient: &PatientRef) -> bool {
+        self.namespace == *patient.namespace() && self.value.expose_secret() == patient.value()
+    }
+}
+
+impl PixmResolver {
+    /// Asks every Manager about the members of `members` it serves, within
+    /// the time left before `deadline`.
+    async fn lookup(
         &self,
         patient: &PatientRef,
         members: &[NodeId],
         deadline: Instant,
-    ) -> BTreeMap<NodeId, Resolution> {
+    ) -> BTreeMap<NodeId, Lookup> {
         let mut out = BTreeMap::new();
-        let Some(system) = self.system(patient.namespace()) else {
+        let unmapped = || {
+            Lookup::Unread(PixmResolveError::UnmappedNamespace(
+                patient.namespace().clone(),
+            ))
+        };
+        let source = self.system(patient.namespace()).and_then(|system| {
+            SourceIdentifier::new(system, SecretString::from(patient.value())).ok()
+        });
+        let Some(source) = source else {
             for member in members {
-                out.insert(
-                    member.clone(),
-                    unavailable(PixmResolveError::UnmappedNamespace(
-                        patient.namespace().clone(),
-                    )),
-                );
+                out.insert(member.clone(), unmapped());
             }
             return out;
-        };
-        let source = match SourceIdentifier::new(system, SecretString::from(patient.value())) {
-            Ok(source) => source,
-            Err(_refused) => {
-                for member in members {
-                    out.insert(
-                        member.clone(),
-                        unavailable(PixmResolveError::UnmappedNamespace(
-                            patient.namespace().clone(),
-                        )),
-                    );
-                }
-                return out;
-            }
         };
         let timeout = deadline.saturating_duration_since(Instant::now());
         let mut tasks = JoinSet::new();
@@ -407,13 +474,148 @@ impl Resolver for PixmResolver {
         while let Some(joined) = tasks.join_next().await {
             // NOTE: a task that panicked leaves its members out of the map,
             // which the resolution step reads as no answer and fails closed.
-            if let Ok(resolutions) = joined {
-                out.extend(resolutions);
+            if let Ok(lookups) = joined {
+                out.extend(lookups);
             }
         }
         out
     }
+
+    /// Keeps `lookups` for the resolution of the same query, unless
+    /// [`SHARED_CAPACITY`] answers are already kept, and drops every kept
+    /// answer whose window has passed.
+    fn keep(&self, patient: &PatientRef, lookups: BTreeMap<NodeId, Lookup>) {
+        let now = Instant::now();
+        let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        shared.retain(|kept| kept.until > now && !kept.is_for(patient));
+        if shared.len() >= SHARED_CAPACITY {
+            return;
+        }
+        shared.push(Shared {
+            namespace: patient.namespace().clone(),
+            value: SecretString::from(patient.value()),
+            until: now.checked_add(SHARED_WINDOW).unwrap_or(now),
+            lookups,
+        });
+    }
+
+    /// Takes the kept answers about `patient` for `members`, leaving none
+    /// behind; a member with no kept answer is absent.
+    fn take(&self, patient: &PatientRef, members: &[NodeId]) -> BTreeMap<NodeId, Lookup> {
+        let now = Instant::now();
+        let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        let found = shared
+            .iter()
+            .position(|kept| kept.until > now && kept.is_for(patient));
+        let mut taken = BTreeMap::new();
+        if let Some(index) = found {
+            let mut kept = shared.swap_remove(index);
+            for member in members {
+                if let Some(lookup) = kept.lookups.remove(member) {
+                    taken.insert(member.clone(), lookup);
+                }
+            }
+        }
+        shared.retain(|kept| kept.until > now);
+        taken
+    }
 }
+
+#[async_trait]
+impl Resolver for PixmResolver {
+    async fn resolve(
+        &self,
+        patient: &PatientRef,
+        members: &[NodeId],
+        deadline: Instant,
+    ) -> BTreeMap<NodeId, Resolution> {
+        let mut lookups = self.take(patient, members);
+        let missing: Vec<NodeId> = members
+            .iter()
+            .filter(|member| !lookups.contains_key(*member))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            lookups.extend(self.lookup(patient, &missing, deadline).await);
+        }
+        lookups
+            .into_iter()
+            .map(|(member, lookup)| (member, lookup.into_resolution()))
+            .collect()
+    }
+}
+
+#[async_trait]
+impl Localizer for PixmResolver {
+    /// Names the members whose `ehr_id` domain holds an identifier for the
+    /// patient at its PIX Manager: §14.2's "demographic-registration" kind,
+    /// over one ITI-83 call per Manager that the resolution of the same
+    /// query reuses.
+    ///
+    /// A Manager that does not answer, or answers in a form this localizer
+    /// cannot read, leaves the localization [`Localization::Unavailable`], so
+    /// §14.1 fail-closed applies: a member behind it might hold the patient.
+    async fn localize(
+        &self,
+        patient: &PatientRef,
+        members: &[NodeId],
+        deadline: Instant,
+    ) -> Localization {
+        let lookups = self.lookup(patient, members, deadline).await;
+        let answered = members.iter().all(|member| lookups.contains_key(member));
+        let failing = lookups.values().any(|lookup| {
+            matches!(
+                lookup,
+                Lookup::Failed(_) | Lookup::TimedOut | Lookup::Unread(_)
+            )
+        });
+        if failing || !answered {
+            let failure = lookups
+                .into_values()
+                .find_map(|lookup| match lookup {
+                    Lookup::Failed(error) => Some(failed(&error)),
+                    Lookup::TimedOut => Some(LocalizerError::DeadlineExceeded),
+                    Lookup::Unread(error) => Some(LocalizerError::Backend(Box::new(error))),
+                    Lookup::Resolved(_) | Lookup::Unknown | Lookup::Unusable(_) => None,
+                })
+                .unwrap_or_else(|| LocalizerError::Backend(Box::new(NoAnswer)));
+            return Localization::Unavailable(failure);
+        }
+        let candidates: BTreeSet<NodeId> = lookups
+            .iter()
+            .filter(|(_, lookup)| matches!(lookup, Lookup::Resolved(_) | Lookup::Unusable(_)))
+            .map(|(member, _)| member.clone())
+            .collect();
+        // NOTE: no specification governs this: our own design; only a
+        // localization with candidates is followed by a resolution to keep for.
+        if candidates.is_empty() {
+            return Localization::NoRecords;
+        }
+        self.keep(patient, lookups);
+        Localization::Candidates(candidates)
+    }
+}
+
+/// The localizer failure of a failed ITI-83 exchange, with the status the
+/// Manager answered when it answered (§2:3.83.4.2.2).
+fn failed(error: &Arc<PixmError>) -> LocalizerError {
+    let status = match error.as_ref() {
+        PixmError::Rejected { status, .. } => Some(*status),
+        PixmError::SourceDomainNotRecognized => Some(http::StatusCode::BAD_REQUEST),
+        PixmError::TargetDomainNotRecognized => Some(http::StatusCode::FORBIDDEN),
+        _ => None,
+    };
+    let source = Box::new(SharedExchange(Arc::clone(error)));
+    match status {
+        Some(status) => LocalizerError::Answered { status, source },
+        None => LocalizerError::Backend(source),
+    }
+}
+
+/// A member no Manager's task answered for.
+#[derive(Debug, Error)]
+#[error("a PIX Manager gave no answer for a member")]
+struct NoAnswer;
 
 /// Asks one Manager about `asked`, within `timeout`.
 async fn ask(
@@ -421,16 +623,11 @@ async fn ask(
     source: &SourceIdentifier,
     asked: Vec<(NodeId, TargetSystem)>,
     timeout: Duration,
-) -> Vec<(NodeId, Resolution)> {
+) -> Vec<(NodeId, Lookup)> {
     if timeout.is_zero() {
         return asked
             .into_iter()
-            .map(|(member, _)| {
-                (
-                    member,
-                    Resolution::Unavailable(ResolverError::DeadlineExceeded),
-                )
-            })
+            .map(|(member, _)| (member, Lookup::TimedOut))
             .collect();
     }
     let targets: Vec<TargetSystem> = asked.iter().map(|(_, domain)| domain.clone()).collect();

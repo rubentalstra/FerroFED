@@ -14,6 +14,9 @@
     reason = "test assertions in tests that return their setup errors"
 )]
 
+#[cfg(feature = "postgres")]
+mod postgres;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -24,7 +27,7 @@ use ferrofed_server::banner::{Deployment, render};
 use ferrofed_server::config::Config;
 use ferrofed_server::config::settings::Settings;
 use ferrofed_server::config::stored_queries::Store;
-use ferrofed_server::config::transport::{self, CleartextError, ProtectedSite};
+use ferrofed_server::config::transport::{self, CleartextError, Encryption, ProtectedSite};
 use ferrofed_server::federation::read_registry;
 use ferrofed_server::reload::{ReloadError, Reloader};
 use ferrofed_server::state::{AppState, StateError};
@@ -115,6 +118,7 @@ fn site(url_key: &str, payload: &str) -> ProtectedSite {
     ProtectedSite {
         url_key: url_key.to_owned(),
         payload: payload.to_owned(),
+        requires: Encryption::Https,
     }
 }
 
@@ -370,7 +374,7 @@ fn the_banner_names_each_cleartext_credential_by_key() -> TestResult {
     let banner = render("9.9.9", &deployment, false);
     let line = banner
         .lines()
-        .find(|line| line.trim_start().starts_with("Plain http"))
+        .find(|line| line.trim_start().starts_with("Unencrypted"))
         .ok_or("the banner names the cleartext credential")?;
     assert!(line.contains(SECTION), "{banner}");
     assert!(!banner.contains(SECRET), "{banner}");

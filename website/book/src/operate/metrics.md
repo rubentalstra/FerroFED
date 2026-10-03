@@ -41,7 +41,7 @@ the federation reaches it. `serve` and `config check` refuse:
   in the same pod, and let it forward over TLS;
 - an `otlp_endpoint` with a user name or a password in it, outside
   `profile = "development"`, since that credential would travel in cleartext
-  ([What must travel over https](configuration.md#what-must-travel-over-https)).
+  ([What must travel encrypted](configuration.md#what-must-travel-encrypted)).
 
 The push sends every 60 seconds; the standard `OTEL_METRIC_EXPORT_INTERVAL`
 environment variable, in milliseconds, changes the interval. A push that

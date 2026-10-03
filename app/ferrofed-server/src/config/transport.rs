@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: Vernum Projecten B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The transport every outbound URL the configuration names must use, by
-//! what it carries. Two policies hold, and this module is the only place
-//! either is written:
+//! The transport every outbound connection the configuration names must use,
+//! by what it carries. Three policies hold, and this module is the only place
+//! any of them is written:
 //!
 //! - **Protected payload** ([`protected_payload`]): a URL a credential or a
 //!   patient identifier is sent to must be `https` outside
 //!   `profile = "development"`. Under that profile it may be `http`, and each
 //!   such site is reported so the banner, the log and `config check` name it.
+//! - **Encrypted connection** ([`encrypted_connection`]): a database
+//!   connection that carries a password must require TLS outside the
+//!   development profile, reported under it as a protected payload is.
 //! - **Trust anchor** ([`trust_anchor`]): a URL the gateway verifies its
 //!   callers against, a key set or a token introspection endpoint, must be
 //!   `https`, or `http` to a loopback host, under every profile, since a
@@ -20,22 +23,26 @@
 //! sent the patient identifier, and a credential when one is configured), the
 //! care services directory of `[registry.mcsd]` when it has credentials, and
 //! `metrics.otlp_endpoint` when it carries a user name or a password. Any
-//! other URL may stay `http`. The stored-query PostgreSQL connection string is
-//! no site: it is never an `http` URL, and whether libpq encrypts it is its
-//! own `sslmode`.
+//! other URL may stay `http`. The encrypted-connection site is the
+//! stored-query store's PostgreSQL connection string, whose `sslmode` must be
+//! `require` when it carries a password and reaches a host over the network.
 //!
 //! The specification assumes transport security and binds it through the
 //! security profiles (§2.2, §13, Annex B); no specification governs these
 //! policies: our own design.
+
+use std::fmt;
 
 use ferrofed_identity::dev::Profile;
 use ferrofed_registry::snapshot::RegistrySnapshot;
 use url::Url;
 
 use crate::config::settings::{Scheme, Settings};
+#[cfg(feature = "postgres")]
+use crate::config::stored_queries::Store;
 
 /// Where a protected payload is sent: the key of the URL and what travels to
-/// it, by key, never a value.
+/// it, by key, never a value, with the encryption it needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtectedSite {
     /// The key of the URL, such as `pixm.manager[0].url`.
@@ -43,14 +50,36 @@ pub struct ProtectedSite {
     /// What travels to the URL, by key, such as
     /// `pixm.manager[0].credentials and patient identifiers`.
     pub payload: String,
+    /// The encryption the site needs outside the development profile.
+    pub requires: Encryption,
 }
 
-/// A credential or a patient identifier configured to travel over a URL that
-/// is not `https`, outside the development profile.
+/// The encryption a protected site needs outside the development profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Encryption {
+    /// An `https` URL.
+    Https,
+    /// A database connection that requires TLS (`sslmode=require`).
+    Tls,
+}
+
+impl fmt::Display for Encryption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Https => "an https URL",
+            Self::Tls => "a connection that requires TLS (sslmode=require)",
+        })
+    }
+}
+
+/// A credential or a patient identifier configured to travel unencrypted,
+/// outside the development profile.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "{} is not an https URL, and {} would travel over it in cleartext: outside profile = \"development\" a credential or a patient identifier is sent only over https",
+    "{} is not {}, and {} would travel over it in cleartext: outside profile = \"development\" a credential or a patient identifier is sent only encrypted",
     site.url_key,
+    site.requires,
     site.payload
 )]
 pub struct CleartextError {
@@ -87,6 +116,33 @@ pub fn protected_payload(
     site: ProtectedSite,
 ) -> Result<Option<ProtectedSite>, CleartextError> {
     let protected = Url::parse(url).is_ok_and(|parsed| parsed.scheme() == "https");
+    admit(profile, protected, site)
+}
+
+/// Holds one database connection to the encrypted-connection policy:
+/// `requires_tls` says whether the connection requires TLS, or sends no
+/// password over a network.
+///
+/// It answers as [`protected_payload`] does.
+///
+/// # Errors
+///
+/// Returns [`CleartextError`] naming `site` when the connection does not
+/// require TLS and `profile` is not development.
+pub fn encrypted_connection(
+    profile: Profile,
+    requires_tls: bool,
+    site: ProtectedSite,
+) -> Result<Option<ProtectedSite>, CleartextError> {
+    admit(profile, requires_tls, site)
+}
+
+/// The answer for `site`, `protected` or not, under `profile`.
+fn admit(
+    profile: Profile,
+    protected: bool,
+    site: ProtectedSite,
+) -> Result<Option<ProtectedSite>, CleartextError> {
     if protected {
         return Ok(None);
     }
@@ -139,7 +195,11 @@ pub fn check(
     let mut hold = |url: &str, site: ProtectedSite| {
         protected_payload(profile, url, site).map(|exposed| cleartext.extend(exposed))
     };
-    let site = |url_key: String, payload: String| ProtectedSite { url_key, payload };
+    let site = |url_key: String, payload: String| ProtectedSite {
+        url_key,
+        payload,
+        requires: Encryption::Https,
+    };
     for (endpoint, scheme) in &settings.credentials {
         let section = format!("credentials.{endpoint}");
         // NOTE: no specification governs this: our own design; an endpoint the
@@ -205,6 +265,16 @@ pub fn check(
             )?;
         }
     }
+    #[cfg(feature = "postgres")]
+    if let Some(Store::Postgres(url)) = &settings.stored_queries {
+        let site = ProtectedSite {
+            url_key: String::from("stored_queries.url"),
+            payload: String::from("the password in stored_queries.url"),
+            requires: Encryption::Tls,
+        };
+        let requires_tls = !crate::stored::postgres::exposes_password(url);
+        cleartext.extend(encrypted_connection(profile, requires_tls, site)?);
+    }
     Ok(cleartext)
 }
 
@@ -229,6 +299,7 @@ pub(crate) fn identity_site(key: &str, credential: Option<&str>) -> ProtectedSit
     ProtectedSite {
         url_key: format!("{key}.url"),
         payload,
+        requires: Encryption::Https,
     }
 }
 
@@ -238,7 +309,8 @@ pub fn warn(cleartext: &[ProtectedSite]) {
         tracing::warn!(
             url = site.url_key,
             payload = site.payload,
-            "a credential or a patient identifier travels unencrypted over plain http, which only the development profile allows"
+            requires = %site.requires,
+            "a credential or a patient identifier travels unencrypted, which only the development profile allows"
         );
     }
 }
@@ -252,8 +324,8 @@ pub fn warn(cleartext: &[ProtectedSite]) {
 pub fn print_warnings(cleartext: &[ProtectedSite]) {
     for site in cleartext {
         eprintln!(
-            "ferrofed: warning: {} travels unencrypted to {}, which is not https; only profile = \"development\" allows that",
-            site.payload, site.url_key
+            "ferrofed: warning: {} travels unencrypted to {}, which is not {}; only profile = \"development\" allows that",
+            site.payload, site.url_key, site.requires
         );
     }
 }
@@ -276,7 +348,10 @@ pub fn check_and_print(
 
 #[cfg(test)]
 mod tests {
-    use super::{CleartextError, ProtectedSite, TrustAnchorError, protected_payload, trust_anchor};
+    use super::{
+        CleartextError, Encryption, ProtectedSite, TrustAnchorError, encrypted_connection,
+        protected_payload, trust_anchor,
+    };
     use ferrofed_identity::dev::Profile;
     use url::Url;
 
@@ -284,7 +359,34 @@ mod tests {
         ProtectedSite {
             url_key: String::from("xcpd.gateway[0].url"),
             payload: String::from("xcpd.assertion and patient identifiers"),
+            requires: Encryption::Https,
         }
+    }
+
+    #[test]
+    fn a_connection_without_tls_is_refused_outside_development_and_named_by_its_need() {
+        let site = ProtectedSite {
+            url_key: String::from("stored_queries.url"),
+            payload: String::from("the password in stored_queries.url"),
+            requires: Encryption::Tls,
+        };
+        assert_eq!(
+            Ok(None),
+            encrypted_connection(Profile::Production, true, site.clone())
+        );
+        assert_eq!(
+            Ok(Some(site.clone())),
+            encrypted_connection(Profile::Development, false, site.clone())
+        );
+        let refused = encrypted_connection(Profile::Production, false, site)
+            .expect_err("a password without TLS is refused");
+        let text = refused.to_string();
+        assert!(
+            text.contains(
+                "stored_queries.url is not a connection that requires TLS (sslmode=require)"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

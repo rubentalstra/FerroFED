@@ -95,7 +95,7 @@ impl AppState {
     /// Tokio runtime context, and the federation records its node requests
     /// through it. Every credential is held to the transport rule of
     /// [`transport::check`] before anything that could send one is built, and
-    /// under the development profile each one that travels over plain `http`
+    /// under the development profile each one that travels unencrypted
     /// is logged as a warning.
     ///
     /// # Errors
@@ -151,7 +151,7 @@ impl AppState {
     /// directory loads. A shared or embedded store is not opened, so the
     /// check reaches no database and takes no file lock.
     ///
-    /// Returns the credentials that travel over plain `http` under the
+    /// Returns the credentials that travel unencrypted under the
     /// development profile, so the caller can say so.
     ///
     /// # Errors

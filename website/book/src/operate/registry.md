@@ -280,7 +280,10 @@ that answers that no member holds the patient's data leaves every member
 `not-localized` with no error.
 
 The localizer is the IHE XCPD binding when `[xcpd]` is set
-([XCPD localization](identity.md#xcpd-localization-xcpd)), and otherwise the
+([XCPD localization](identity.md#xcpd-localization-xcpd)). Otherwise it is
+the resolver: the PIXm resolver when `[pixm]` is set, which names the members
+whose domain holds the patient at the PIX Manager
+([`[pixm]` as the localizer](identity.md#pixm-as-the-localizer)), or the
 [development cross-reference](identity.md), under `profile = "development"`,
 which names the members its `[dev]` rows map the patient at. The localized
 selection with no localizer refuses to boot, and so do
@@ -373,7 +376,7 @@ endpoint is refused (`demographic-endpoint`, below).
 A reload whose file changes `profile` is refused (`profile`, below), so
 everything the development profile admits, the development cross-reference
 and consent table, and a credential or patient identifier over plain `http`
-([What must travel over https](configuration.md#what-must-travel-over-https)),
+([What must travel encrypted](configuration.md#what-must-travel-encrypted)),
 follows the profile the process started with.
 
 A valid configuration replaces the running registry at once. A request that

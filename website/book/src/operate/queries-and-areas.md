@@ -214,7 +214,12 @@ url_file = "/run/secrets/ferrofed-stored-queries-url"
 - TLS uses rustls with the platform's trusted roots, as the gateway's calls
   to the members do, and always verifies the server's certificate.
   `sslmode=require` refuses a server without TLS; the default, `prefer`,
-  falls back to a connection without it, so set `require` in production.
+  falls back to a connection without it. Outside the development profile, a
+  connection string that carries a password to a networked host must set
+  `sslmode=require`, or `config check`, the start and a reload refuse it
+  naming `stored_queries.url`; under the development profile it starts and
+  is named in the banner and the log
+  ([What must travel encrypted](configuration.md#what-must-travel-encrypted)).
 - At start, and each time it reconnects, the gateway creates the schema
   `ferrofed` and the table `ferrofed.stored_query_definition` when they are
   absent, one replica at a time. The role needs `CREATE` on the database to

@@ -5,12 +5,12 @@
 //! gateway does when it does not answer (N4, N10, §14.1).
 //!
 //! Under `federation.node_selection = "localized"` exactly one localizer is
-//! active: the XCPD localizer when `[xcpd]` is set (Annex A.3), and the
-//! static development cross-reference under `profile = "development"`
-//! otherwise. A configured localizer that does not answer
-//! fails closed unless `[federation.localization] on_failure = "ask-all"`
-//! declares otherwise, and `OPTIONS {base}/` declares the policy either way
-//! (§7a.2, N30). Under `node_selection = "ask-all"` there is no localizer and
+//! active: the XCPD localizer when `[xcpd]` is set (Annex A.3), the PIXm
+//! resolver when `[pixm]` is (§14.2), and the static development
+//! cross-reference under `profile = "development"` otherwise. A configured
+//! localizer that does not answer fails closed unless
+//! `[federation.localization] on_failure = "ask-all"` declares otherwise, and
+//! `OPTIONS {base}/` declares the policy either way (§7a.2, N30). Under `node_selection = "ask-all"` there is no localizer and
 //! every member is a candidate (§4.3, N4 last sentence).
 
 use std::collections::BTreeMap;
@@ -21,6 +21,7 @@ use std::time::Duration;
 use ferrofed_identity::dev::{Profile, StaticResolver};
 use ferrofed_identity::localizer::{Localizer, OnFailure};
 use ferrofed_identity::patient::{IdentifierNamespace, PatientRefError};
+use ferrofed_identity::pixm::PixmResolver;
 use ferrofed_identity::xcpd::{
     AssertionSource, FixedAssertion, GatewayConfig, LogAudit, Tls, Transport, XcpdConfig,
     XcpdConfigError, XcpdLocalizer,
@@ -133,6 +134,9 @@ pub const DEVELOPMENT_STATIC: &str = "development-static";
 /// The `localization.mode` of the XCPD localizer (Annex A.3).
 pub const XCPD: &str = "xcpd";
 
+/// The `localization.mode` of the PIXm localizer (§14.2, Annex A.1).
+pub const PIXM: &str = "pixm";
+
 /// A localization configuration that cannot be set up.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -141,7 +145,7 @@ pub enum LocalizationError {
     /// configured, so no undirected patient query could find its node set
     /// (N4).
     #[error(
-        "federation.node_selection = \"localized\" needs a localizer: [xcpd], or the [dev] cross-reference under profile = \"development\" (N4, §14.1)"
+        "federation.node_selection = \"localized\" needs a localizer: [xcpd], [pixm], or the [dev] cross-reference under profile = \"development\" (N4, §14.1)"
     )]
     NoLocalizer,
     /// `[federation.localization]` is set under a node selection that uses
@@ -178,12 +182,22 @@ pub enum LocalizationError {
     Xcpd(#[source] XcpdConfigError),
 }
 
+/// The resolver the federation runs, as a localizer it can also be.
+#[derive(Debug, Default)]
+pub struct Resolving {
+    /// The static development cross-reference, when `[dev]` is set.
+    pub development: Option<Arc<StaticResolver>>,
+    /// The PIXm resolver, when `[pixm]` is set.
+    pub pixm: Option<Arc<PixmResolver>>,
+}
+
 /// The localization policy `settings` declare under `selection` over the
-/// members of `snapshot`, with the static development cross-reference
-/// `development` when one is configured.
+/// members of `snapshot`, with the resolver the federation runs, `resolving`.
 ///
-/// The localizer is the XCPD one when `[xcpd]` is set, and the development
-/// cross-reference otherwise.
+/// The localizer is the XCPD one when `[xcpd]` is set. Otherwise it is the
+/// resolver itself: the PIXm resolver, which names the members whose domain
+/// holds the patient over the ITI-83 call its resolution reuses (§14.2), or
+/// the development cross-reference.
 ///
 /// # Errors
 ///
@@ -195,7 +209,7 @@ pub enum LocalizationError {
 pub fn policy(
     settings: &Settings,
     selection: NodeSelection,
-    development: Option<Arc<StaticResolver>>,
+    resolving: Resolving,
     snapshot: &RegistrySnapshot,
 ) -> Result<LocalizationPolicy, LocalizationError> {
     let federation = &settings.federation;
@@ -213,14 +227,17 @@ pub fn policy(
                     timeout: Duration::from_millis(default.timeout_ms),
                 }
             });
-            let (localizer, mode): (Arc<dyn Localizer>, _) = match (&settings.xcpd, development) {
-                (Some(xcpd), _) => (
-                    Arc::new(xcpd_localizer(xcpd, settings.profile, snapshot)?),
-                    XCPD,
-                ),
-                (None, Some(development)) => (development, DEVELOPMENT_STATIC),
-                (None, None) => return Err(LocalizationError::NoLocalizer),
-            };
+            let Resolving { development, pixm } = resolving;
+            let (localizer, mode): (Arc<dyn Localizer>, _) =
+                match (&settings.xcpd, pixm, development) {
+                    (Some(xcpd), _, _) => (
+                        Arc::new(xcpd_localizer(xcpd, settings.profile, snapshot)?),
+                        XCPD,
+                    ),
+                    (None, Some(pixm), _) => (pixm, PIXM),
+                    (None, None, Some(development)) => (development, DEVELOPMENT_STATIC),
+                    (None, None, None) => return Err(LocalizationError::NoLocalizer),
+                };
             let policy =
                 LocalizationPolicy::new(localizer, mode, declared.on_failure, declared.timeout);
             Ok(match &settings.xcpd {

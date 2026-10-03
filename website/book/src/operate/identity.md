@@ -65,7 +65,7 @@ bearer_token_file = "/run/secrets/pix-token"
   Manager is asked for patient identifiers, so `http` is refused naming
   `pixm.manager[N].url`, with or without credentials, unless the profile is
   `development`
-  ([What must travel over https](configuration.md#what-must-travel-over-https)). A user name or password in it refuses the configuration, naming
+  ([What must travel encrypted](configuration.md#what-must-travel-encrypted)). A user name or password in it refuses the configuration, naming
   `pixm.manager[N].url` and never quoting it; the credentials go in
   `[pixm.manager.credentials]`, with the keys of an endpoint's
   [credentials](configuration.md#the-file): `bearer_token`, or `user` and
@@ -94,6 +94,25 @@ gateway fails the query by default rather than answer without it (§11.1;
 `openEHR-federation-completeness: partial`, the members that did resolve
 answer. Resolution runs inside the request's overall budget
 ([Timeouts](queries-and-areas.md#timeouts)).
+
+### `[pixm]` as the localizer
+
+Under `federation.node_selection = "localized"` with no `[xcpd]`, the
+`[pixm]` resolver is also the localizer, the "demographic-registration" kind
+of §14.2. The candidates are the members whose domain holds an identifier
+for the patient at its Manager. Every other member is `not-localized` and is
+never asked. The resolution of the same query reuses that ITI-83 answer, so
+each query still asks each Manager once.
+
+A member whose domain holds two identifiers, or one that is no `ehr_id`, is a
+candidate, because the Manager holds the patient there; its resolution then
+reports why it could not be asked. A Manager that fails, answers in a form
+the gateway cannot read, or does not answer within
+`[federation.localization] timeout_ms` fails the localization closed
+(§14.1): every member is `not-localized` with the error, and no member is
+asked unless `on_failure = "ask-all"`. `OPTIONS {base}/` declares
+`localization.mode` as `"pixm"`. With `[xcpd]` set, XCPD localizes and
+`[pixm]` only resolves.
 
 ## The development cross-reference: `[dev]`
 

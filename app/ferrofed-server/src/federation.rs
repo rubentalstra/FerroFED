@@ -328,20 +328,21 @@ impl Federation {
                 endpoint: endpoint.clone(),
             });
         }
-        let mut development = None;
-        let mut consent = None;
+        let (mut development, mut consent, mut pixm) = (None, None, None);
         let resolver = match (&settings.dev, &settings.pixm) {
             (Some(_), Some(_)) => return Err(FederationError::TwoResolvers),
             (None, None) => None,
             (Some(section), None) => {
                 (development, consent) = crate::development::seams(settings, section, &snapshot)?;
-                development
-                    .clone()
-                    .map(|resolver| -> Arc<dyn Resolver> { resolver })
+                development.clone().map(|it| -> Arc<dyn Resolver> { it })
             }
-            (None, Some(pixm)) => Some(pixm_resolver(pixm, &snapshot)?),
+            (None, Some(section)) => {
+                pixm = Some(pixm_resolver(section, &snapshot)?);
+                pixm.clone().map(|it| -> Arc<dyn Resolver> { it })
+            }
         };
-        let localization = localization::policy(settings, selection, development, &snapshot)
+        let resolving = localization::Resolving { development, pixm };
+        let localization = localization::policy(settings, selection, resolving, &snapshot)
             .map_err(FederationError::Localization)?;
         // NOTE: §11.5 deadlines live on each call; the client's own timeout
         // only backstops a connection the call deadline cannot reach.
@@ -734,7 +735,7 @@ fn default_index_capacity() -> NonZeroU32 {
 fn pixm_resolver(
     pixm: &PixmSettings,
     snapshot: &RegistrySnapshot,
-) -> Result<Arc<dyn Resolver>, FederationError> {
+) -> Result<Arc<PixmResolver>, FederationError> {
     let mut managers = Vec::with_capacity(pixm.managers.len());
     for (index, manager) in pixm.managers.iter().enumerate() {
         let mut members = BTreeMap::new();

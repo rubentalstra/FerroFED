@@ -12,7 +12,7 @@
 //! The banner prints only when the console renders the terminal form, so a
 //! log pipeline reading JSON never receives it. It shows counts, an address,
 //! a path, switches, and the configuration keys of each credential or
-//! patient identifier that travels over plain `http`: never a credential, a
+//! patient identifier that travels unencrypted: never a credential, a
 //! URL, a header value or anything from a request. No specification governs the banner: our own design.
 
 use std::fmt::Write as _;
@@ -85,7 +85,7 @@ pub struct Deployment {
     pub stored_queries: Option<Backend>,
     /// Whether the configuration declares the development profile.
     pub development: bool,
-    /// Each credential or patient identifier that travels over plain `http`,
+    /// Each credential or patient identifier that travels unencrypted,
     /// which only the development profile allows, by key.
     pub cleartext: Vec<ProtectedSite>,
 }
@@ -200,7 +200,7 @@ pub fn render(version: &str, deployment: &Deployment, colour: bool) -> String {
     };
     line(&mut out, "Stored queries", stored_queries);
     for (index, site) in deployment.cleartext.iter().enumerate() {
-        let label = if index == 0 { "Plain http" } else { "" };
+        let label = if index == 0 { "Unencrypted" } else { "" };
         line(&mut out, label, &site.payload);
     }
     if deployment.development {

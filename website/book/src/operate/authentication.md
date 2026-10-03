@@ -68,7 +68,7 @@ demographic_clients = []
 | `auth.fetch_timeout_ms` | `5000` | How long a key set fetch or an introspection call may take. |
 | `auth.purpose_of_use.required` | `true` | Whether a token must declare a purpose of use ([Purpose of use](#purpose-of-use)). |
 | `auth.issuer[].issuer` | none | The issuer identifier its tokens carry in `iss`. |
-| `auth.issuer[].jwks_uri` | none | The URL of its JWK Set: `https`, or `http` to a loopback host, under every profile ([What must travel over https](configuration.md#what-must-travel-over-https)). |
+| `auth.issuer[].jwks_uri` | none | The URL of its JWK Set: `https`, or `http` to a loopback host, under every profile ([What must travel encrypted](configuration.md#what-must-travel-encrypted)). |
 | `auth.issuer[].jwks_file` | none | A file holding its JWK Set, for keys handed over out of band. |
 | `auth.issuer[].jwks` | none | Its JWK Set itself, as JSON text. |
 | `auth.issuer[].introspection_endpoint` | none | Its RFC 7662 introspection endpoint, with `client_id` and `client_secret` or `client_secret_file`: `https`, or `http` to a loopback host, under every profile. |
