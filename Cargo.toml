@@ -47,7 +47,7 @@ openehr-sdt = { version = "0.0.81", default-features = false }
 # (the Cargo reference, Specifying Dependencies, multiple locations); an app/*
 # member is never packaged, so it takes the path alone.
 openehr-federation = { path = "crates/openehr-federation", version = "0.0.35" }
-ihe-iti = { path = "crates/ihe-iti", version = "0.0.12" }
+ihe-iti = { path = "crates/ihe-iti", version = "0.0.13" }
 ferrofed-registry = { path = "app/ferrofed-registry" }
 ferrofed-identity = { path = "app/ferrofed-identity" }
 ferrofed-engine = { path = "app/ferrofed-engine" }

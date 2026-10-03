@@ -85,13 +85,19 @@ pub struct DirectorySettings {
     pub credentials: Option<Scheme>,
     /// How often the changes are asked for.
     pub refresh_interval: Duration,
-    /// How long one page of an answer may take.
-    pub timeout: Duration,
+    /// How long one whole read or refresh may take.
+    pub deadline: Duration,
+    /// The most pages one read or refresh may read.
+    pub max_pages: usize,
+    /// The most bytes of answer bodies one read or refresh may read.
+    pub max_bytes: usize,
+    /// The most Bundle entries one read or refresh may read.
+    pub max_entries: usize,
 }
 
 impl DirectorySettings {
-    /// Whether `other` names the same directory, credentials, interval and
-    /// timeout.
+    /// Whether `other` names the same directory, credentials, interval,
+    /// deadline and caps.
     #[must_use]
     pub fn same_as(&self, other: &Self) -> bool {
         let credentials = match (&self.credentials, &other.credentials) {
@@ -109,7 +115,10 @@ impl DirectorySettings {
         credentials
             && self.url.expose() == other.url.expose()
             && self.refresh_interval == other.refresh_interval
-            && self.timeout == other.timeout
+            && self.deadline == other.deadline
+            && self.max_pages == other.max_pages
+            && self.max_bytes == other.max_bytes
+            && self.max_entries == other.max_entries
     }
 }
 

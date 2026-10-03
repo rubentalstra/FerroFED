@@ -13,7 +13,7 @@ use serde::Deserialize;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{BASE, FHIR_JSON, PROMPT, bundle, client, matched, vendored};
+use super::{BASE, FHIR_JSON, budget, bundle, client, matched, vendored};
 
 /// The members of a `CapabilityStatement` the client answers to.
 #[derive(Debug, Deserialize)]
@@ -231,11 +231,11 @@ async fn the_igs_examples_read_through_iti_90() {
     }
     let client: McsdClient = client(&server);
     let organizations = client
-        .find(CareService::Organization, &[], PROMPT)
+        .find(CareService::Organization, &[], &mut budget())
         .await
         .expect("the example Organizations");
     let endpoints = client
-        .find(CareService::Endpoint, &[], PROMPT)
+        .find(CareService::Endpoint, &[], &mut budget())
         .await
         .expect("the example Endpoints");
     assert_eq!(3, organizations.matches().len());
@@ -243,7 +243,7 @@ async fn the_igs_examples_read_through_iti_90() {
     let replica = ihe_iti::mcsd::replica::Replica::read(
         &client,
         ihe_iti::mcsd::replica::Scope::everything(),
-        PROMPT,
+        &mut budget(),
     )
     .await
     .expect("a replica");

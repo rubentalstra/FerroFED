@@ -171,7 +171,10 @@ impl Registry {
 /// Its `Organization`s and `Endpoint`s are read with ITI-90 and checked as
 /// the registry document in FHIR form is; every `refresh_interval_s` the
 /// changes since the last read are asked for with ITI-91 and checked again
-/// before they replace the running registry.
+/// before they replace the running registry. Each read or refresh ends at
+/// its deadline and its caps on pages, bytes and entries, so a faulty
+/// directory can neither hold it nor fill the gateway's memory (no
+/// specification governs these limits: our own design).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct McsdDirectory {
@@ -183,8 +186,15 @@ pub struct McsdDirectory {
     pub credentials: Option<Credentials>,
     /// How often the changes are asked for, in seconds.
     pub refresh_interval_s: u64,
-    /// How long one page of an answer may take, in milliseconds.
-    pub timeout_ms: u64,
+    /// How long one whole read or refresh may take, every page of both
+    /// resource types included, in milliseconds.
+    pub deadline_ms: u64,
+    /// The most pages one read or refresh may read.
+    pub max_pages: usize,
+    /// The most bytes of answer bodies one read or refresh may read.
+    pub max_bytes: usize,
+    /// The most Bundle entries one read or refresh may read.
+    pub max_entries: usize,
 }
 
 impl Default for McsdDirectory {
@@ -193,7 +203,10 @@ impl Default for McsdDirectory {
             url: SecretUrl::default(),
             credentials: None,
             refresh_interval_s: 300,
-            timeout_ms: 10_000,
+            deadline_ms: 30_000,
+            max_pages: 200,
+            max_bytes: 64 << 20,
+            max_entries: 50_000,
         }
     }
 }

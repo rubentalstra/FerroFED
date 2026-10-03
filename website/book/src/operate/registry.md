@@ -134,7 +134,10 @@ both is refused.
 [registry.mcsd]
 url = "https://directory.example.org/fhir"   # the directory's FHIR base
 refresh_interval_s = 300                    # the default; 0 is refused
-timeout_ms = 10000                          # per page, the default
+deadline_ms = 30000                         # one whole read or refresh, the default
+max_pages = 200                             # the defaults of the three caps
+max_bytes = 67108864                        # 64 MiB of answer bodies
+max_entries = 50000
 
 [registry.mcsd.credentials]                 # when the transport does not authenticate
 bearer_token_file = "/run/secrets/directory-token"
@@ -147,15 +150,18 @@ exactly as the FHIR form above. The rest of the directory is not the
 federation's and is never read into the registry. The URL is `http` or
 `https` with no user name or password; the credentials take a bearer token or
 basic credentials, each through its `_file` sibling, and never an OAuth 2.0
-grant.
+grant. A directory with credentials is `https` outside
+`profile = "development"`, and the configuration is refused before the
+directory is asked otherwise; under that profile the site is reported as
+every other cleartext credential is.
 
 At start, the gateway reads the members with ITI-90, Find Matching Care
 Services: `GET [base]/Organization?identifier=…|` and
 `GET [base]/Endpoint?identifier=…|`, every page. The content then passes
 every check the FHIR form passes: the connection type of §15.2 (N19), one
 managing organisation per endpoint (N20), unique ids, and everything the
-native form refuses. A directory that cannot be read, or holds a registry
-that breaks a rule, stops the start; `config check` reads the directory the
+native form refuses. A directory that cannot be read within the deadline
+and the caps, or holds a registry that breaks a rule, stops the start; `config check` reads the directory the
 same way and names the fault.
 
 Every `refresh_interval_s` the gateway asks for the changes since the last
@@ -182,17 +188,27 @@ A refresh that changed something goes through the same checks as a reload:
   `class = "registry-invalid"`, and the refusal counts as a refused reload.
   The next refresh asks again from the same instant, so the registry follows
   the directory once the directory is put right.
-- When the directory does not answer, or answers a `5xx` or something that
-  is not ITI-91, the running registry stays and the gateway logs a warning.
-  `GET {base}/health/dependencies` reports the directory as `directory`:
-  `up` after its last answer, `failing` after a `5xx` or a malformed answer,
-  and `down` when it did not answer. The directory's state never gates
-  readiness.
+- When the directory's answer runs past `deadline_ms`, `max_pages`,
+  `max_bytes` or `max_entries`, or does not hold to ITI-91, the refresh is
+  refused the same way, with `class = "registry-budget"` for a limit, and
+  counts as a refused reload. Each limit bounds one whole read or refresh,
+  over every page of both resource types, so a directory that links its
+  pages in a cycle or answers without end cannot hold the gateway or fill
+  its memory. A partial answer never becomes the registry. No
+  specification governs these limits; they are FerroFED's own design.
+- When the directory cannot be reached, or refuses the request with an
+  HTTP error, the running registry stays and the gateway logs a warning.
+
+`GET {base}/health/dependencies` reports the directory as `directory`: `up`
+after its last answer, `failing` after a `5xx`, a malformed answer or one
+past a cap, and `down` when it did not answer before the deadline or could
+not be reached. The directory's state never gates readiness.
 
 A `SIGHUP` reload with a directory rebuilds the federation over the registry
-the directory gave, applying `[credentials]`, `[dev]` and `[pixm]`; it never
-asks the directory. A change to `[registry.mcsd]` takes a restart, and a
-change between a document and a directory is refused as `registry-presence`.
+the directory gave, applying `[credentials]`, `[dev]`, `[pixm]` and
+`[xcpd]`; it never asks the directory. A change to `[registry.mcsd]` takes a
+restart, and a change between a document and a directory is refused as
+`registry-presence`.
 
 ## Federation id
 
@@ -398,6 +414,7 @@ the same file to see the fault. The classes are:
 | `registry-unreadable` | the registry document, or the directory, cannot be read |
 | `registry-invalid` | the registry document, or the directory's content, breaks a registry rule |
 | `registry-directory` | the directory of `[registry.mcsd]` cannot be asked as configured |
+| `registry-budget` | a refresh of the directory ran past its deadline or a cap |
 | `credentials` | a `[credentials]` section names an endpoint the document does not declare |
 | `demographic-endpoint` | `federation.demographic_endpoint` names an endpoint the new document does not declare |
 | `dev-cross-reference`, `pixm`, `resolvers` | the resolver refuses the new members, or both resolvers are set |

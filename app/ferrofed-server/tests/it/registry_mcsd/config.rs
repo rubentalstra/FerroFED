@@ -25,7 +25,7 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// The `[registry.mcsd]` section over `base`, with the federation it needs.
 fn section(base: &str, extra: &str) -> String {
     format!(
-        "[server]\nlisten = \"127.0.0.1:1\"\n\n[registry.mcsd]\nurl = \"{base}\"\ntimeout_ms = 2000\n{extra}\n\n[federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n"
+        "[server]\nlisten = \"127.0.0.1:1\"\n\n[registry.mcsd]\nurl = \"{base}\"\ndeadline_ms = 2000\n{extra}\n\n[federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n"
     )
 }
 
@@ -176,4 +176,68 @@ fn a_grant_and_a_zero_interval_are_refused() {
         ),
         "a zero interval is refused"
     );
+}
+
+/// The directory's credentials travel over `https` only, outside the
+/// development profile, and the refusal comes before the directory is asked;
+/// under that profile the site is reported (no specification governs this:
+/// our own design).
+#[test]
+fn directory_credentials_over_plain_http_are_refused_outside_development() -> TestResult {
+    let section = "[registry.mcsd]\nurl = \"http://directory.example.org/fhir\"\n\n[registry.mcsd.credentials]\nbearer_token = \"synthetic-directory-token\"\n";
+    let refused = settings(section);
+    let error = refused.err().ok_or("cleartext credentials are refused")?;
+    let text = error.to_string();
+    assert!(
+        text.contains("registry.mcsd.url") && text.contains("registry.mcsd.credentials"),
+        "{text}"
+    );
+    assert!(!text.contains("synthetic-directory-token"), "{text}");
+    let development = settings(&format!("profile = \"development\"\n\n{section}"))?;
+    let reported = ferrofed_server::config::transport::check(&development, None)?;
+    assert_eq!(
+        vec!["registry.mcsd.url"],
+        reported
+            .iter()
+            .map(|site| site.url_key.as_str())
+            .collect::<Vec<_>>()
+    );
+    let without = settings("[registry.mcsd]\nurl = \"http://directory.example.org/fhir\"\n")?;
+    assert!(
+        ferrofed_server::config::transport::check(&without, None)?.is_empty(),
+        "a directory asked with no credential sends nothing protected"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_zero_deadline_or_cap_is_refused_and_the_defaults_hold() -> TestResult {
+    for key in ["deadline_ms", "max_pages", "max_bytes", "max_entries"] {
+        let refused = settings(&format!(
+            "[registry.mcsd]\nurl = \"https://directory.example.org/fhir\"\n{key} = 0\n"
+        ));
+        let full = format!("registry.mcsd.{key}");
+        assert!(
+            matches!(
+                refused.err().as_deref().and_then(|error| error.downcast_ref::<ConfigError>()),
+                Some(ConfigError::Zero { key }) if *key == full
+            ),
+            "a zero {key} is refused"
+        );
+    }
+    let resolved = settings("[registry.mcsd]\nurl = \"https://directory.example.org/fhir\"\n")?;
+    let directory = resolved
+        .registry_directory
+        .as_ref()
+        .ok_or("a directory is configured")?;
+    assert_eq!(std::time::Duration::from_secs(30), directory.deadline);
+    assert_eq!(
+        (200, 64 << 20, 50_000),
+        (
+            directory.max_pages,
+            directory.max_bytes,
+            directory.max_entries
+        )
+    );
+    Ok(())
 }

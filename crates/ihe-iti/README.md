@@ -82,21 +82,24 @@ ITI-90, Find Matching Care Services: `GET [base]/Organization` or
 `searchset` Bundle. `updates` is ITI-91, Request Care Services Updates:
 `GET [base]/[type]/_history?_since=[instant]`, answered with a `history`
 Bundle, newest version first, a deletion as a `DELETE` entry. Both follow
-every `next` link on the directory's own origin, up to 1000 pages, and
-return the `Date` the directory stamped its first page with. A status other
-than `200`, an answer that is not the interaction's Bundle, a match of
-another type and a page link to another origin are errors that carry no URL
-and no text of the directory's. Build the `reqwest::Client` you pass in with
-`redirect::Policy::none()`.
+every `next` link on the directory's own origin and return the `Date` the
+directory stamped its first page with, as written. Every walk draws on a
+`budget::Budget`: one deadline for the whole walk, and caps on the pages,
+the answer bytes and the entries it reads (by default 200 pages, 64 MiB and
+50,000 entries). Running out of any of them is an error, never a shorter
+answer. A status other than `200`, an answer that is not the interaction's
+Bundle, a match of another type and a page link to another origin are errors
+that carry no URL and no text of the directory's. Build the
+`reqwest::Client` you pass in with `redirect::Policy::none()`.
 
 `ihe_iti::mcsd::replica::Replica` holds a directory's `Organization`s and
 `Endpoint`s in a `Scope` (every resource, or those carrying an identifier in
-a system you name), read with ITI-90 and kept in step with ITI-91 from 60
-seconds before the directory's own clock reading. The newest version of each
-resource wins, a deletion or a version that leaves the scope removes it, and
-a directory that sent no readable `Date` is read again whole. A refresh
-returns a new replica and leaves the old one as it was, and `directory`
-answers the content as a `Directory`.
+a system you name), read with ITI-90 and kept in step with ITI-91 from an
+instant you choose, usually from the `Date` it keeps of its last read. The
+newest version of each resource wins, a deletion or a version that leaves
+the scope removes it, and a refresh with no instant reads everything again.
+A refresh returns a new replica and leaves the old one as it was, and
+`directory` answers the content as a `Directory`.
 
 ## XCPD (`xcpd`)
 
@@ -132,10 +135,9 @@ patient, as a `SecretString`. A message the recorder refuses fails the
 discovery with `XcpdError::Audit`, so no answer is used without its audit.
 
 The XML is read and written with `quick-xml`, which the FHIR features
-compile already through `fhir-types`; `xcpd` adds `uuid` for the message
-ids, which no other feature compiles, and `jiff` for the creation time,
-which `mcsd` compiles too for the history's `_since` and the directory's
-`Date`.
+compile already through `fhir-types`; `xcpd` adds only `uuid` for the
+message ids and `jiff` for the creation time, and no other feature compiles
+either.
 
 The other profile modules hold their place and land with their FerroFED issues
 (<https://github.com/FerroHEALTH/FerroFED>).

@@ -32,7 +32,10 @@ fn source(harness: &HarnessDirectory) -> Result<DirectorySource, Box<dyn Error>>
     Ok(DirectorySource::new(DirectoryConfig {
         base: SecretUrl::new(harness.base()),
         credentials: None,
-        timeout: Duration::from_secs(5),
+        deadline: Duration::from_secs(5),
+        pages: 200,
+        bytes: 64 << 20,
+        entries: 50_000,
     })?)
 }
 
@@ -103,12 +106,60 @@ async fn a_directory_that_does_not_answer_is_an_exchange_error() -> TestResult {
     let source = DirectorySource::new(DirectoryConfig {
         base: SecretUrl::new(format!("{}/fhir", ferrofed_testkit::unreachable::BASE)),
         credentials: None,
-        timeout: Duration::from_secs(2),
+        deadline: Duration::from_secs(2),
+        pages: 200,
+        bytes: 64 << 20,
+        entries: 50_000,
     })?;
     let refused = source.read().await;
     let Err(DirectoryReadError::Exchange(error)) = &refused else {
         return Err(format!("an exchange error: {refused:?}").into());
     };
     assert!(!error.answered());
+    Ok(())
+}
+
+/// A refresh asks ITI-91 from one minute before the `Date` the directory
+/// stamped its read with, on the directory's own clock.
+#[tokio::test]
+async fn a_refresh_asks_from_a_minute_before_the_directorys_clock() -> TestResult {
+    let harness = HarnessDirectory::start().await;
+    harness.publish(&[member("a")])?;
+    let source = source(&harness)?;
+    let read = source.read().await?;
+    let refreshed = source.refresh(read.content()).await?;
+    assert!(
+        matches!(refreshed, Refreshed::Unchanged(_)),
+        "{refreshed:?}"
+    );
+    let requests = harness.requests().await;
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.ends_with("_history?_since=2026-01-01T01%3A59%3A00Z")),
+        "two changes move the harness clock to 02:00: {requests:?}"
+    );
+    Ok(())
+}
+
+/// A directory whose answer runs past a cap gives no registry: the read is an
+/// exchange error that says it ran out of its budget.
+#[tokio::test]
+async fn a_directory_past_a_cap_gives_no_registry() -> TestResult {
+    let harness = HarnessDirectory::start().await;
+    harness.publish(&[member("a"), member("b")])?;
+    let source = DirectorySource::new(DirectoryConfig {
+        base: SecretUrl::new(harness.base()),
+        credentials: None,
+        deadline: Duration::from_secs(5),
+        pages: 200,
+        bytes: 64 << 20,
+        entries: 3,
+    })?;
+    let refused = source.read().await;
+    let Err(DirectoryReadError::Exchange(error)) = &refused else {
+        return Err(format!("an exchange error: {refused:?}").into());
+    };
+    assert!(error.exceeded(), "{error:?}");
     Ok(())
 }

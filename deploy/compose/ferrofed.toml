@@ -45,7 +45,10 @@ format = "toml"
 # [registry.mcsd]
 # url = "https://directory.example.org/fhir"   # EDIT
 # refresh_interval_s = 300
-# timeout_ms = 10000
+# deadline_ms = 30000   # one read or refresh, every page
+# max_pages = 200
+# max_bytes = 67108864
+# max_entries = 50000
 #
 # [registry.mcsd.credentials]
 # bearer_token_file = "/run/secrets/ferrofed/directory-token"

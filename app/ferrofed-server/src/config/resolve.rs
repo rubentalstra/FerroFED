@@ -11,6 +11,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use ferrofed_engine::fanout::Budget;
+use ferrofed_identity::dev::Profile;
 use ferrofed_registry::id::EndpointId;
 use ferrofed_registry::secret::SecretUrl;
 use openehr_federation::aggregate::AggregateFunction;
@@ -24,6 +25,7 @@ use crate::config::settings::{
     DirectorySettings, FederationSettings, LocalizationSettings, MetricsSettings,
     PixManagerSettings, PixmSettings, Scheme, ServerSettings, Settings, TelemetrySettings,
 };
+use crate::config::transport::{self, directory_site};
 use crate::config::{
     COMBINING_MARGIN_MS, Config, Federation, Localization, McsdDirectory, Metrics, NodeSelection,
     OffsetPaging, Pixm, stored_queries,
@@ -126,7 +128,7 @@ impl Config {
             .registry
             .mcsd
             .as_ref()
-            .map(resolve_directory)
+            .map(|directory| resolve_directory(directory, self.profile))
             .transpose()?;
         let stored_queries = stored_queries::resolve(self)?;
         let metrics = resolve_metrics(&self.metrics, listen)?;
@@ -301,9 +303,12 @@ fn resolve_pixm(pixm: &Pixm) -> Result<PixmSettings, Error> {
 }
 
 /// Resolves `[registry.mcsd]`: an `http` or `https` base URL with no user name
-/// or password, a bearer token or basic credentials, and a positive interval
-/// and timeout.
-fn resolve_directory(directory: &McsdDirectory) -> Result<DirectorySettings, Error> {
+/// or password, a bearer token or basic credentials, and a positive interval,
+/// deadline and caps.
+fn resolve_directory(
+    directory: &McsdDirectory,
+    profile: Profile,
+) -> Result<DirectorySettings, Error> {
     let key = "registry.mcsd.url";
     if directory.url.is_empty() {
         return Err(Error::Missing {
@@ -333,6 +338,11 @@ fn resolve_directory(directory: &McsdDirectory) -> Result<DirectorySettings, Err
     if matches!(credentials, Some(Scheme::OAuth2(_))) {
         return Err(Error::GrantNotHere { section });
     }
+    // NOTE: no specification governs this: our own design; the credential is
+    // held to https before anything is sent, and transport::check reports it.
+    if credentials.is_some() {
+        transport::protected_payload(profile, directory.url.expose(), directory_site())?;
+    }
     let refresh_interval = Duration::from_secs(directory.refresh_interval_s);
     if refresh_interval.is_zero() {
         return Err(Error::Zero {
@@ -343,7 +353,10 @@ fn resolve_directory(directory: &McsdDirectory) -> Result<DirectorySettings, Err
         url: directory.url.clone(),
         credentials,
         refresh_interval,
-        timeout: positive_ms("registry.mcsd.timeout_ms", directory.timeout_ms)?,
+        deadline: positive_ms("registry.mcsd.deadline_ms", directory.deadline_ms)?,
+        max_pages: positive("registry.mcsd.max_pages", directory.max_pages)?,
+        max_bytes: positive("registry.mcsd.max_bytes", directory.max_bytes)?,
+        max_entries: positive("registry.mcsd.max_entries", directory.max_entries)?,
     })
 }
 
@@ -393,6 +406,16 @@ fn resolve_metrics(metrics: &Metrics, server: SocketAddr) -> Result<MetricsSetti
         listen,
         otlp_endpoint: otlp_endpoint.map(|endpoint| SecretUrl::new(String::from(endpoint))),
     })
+}
+
+/// Returns `count`, refusing zero under `key`.
+fn positive(key: &str, count: usize) -> Result<usize, Error> {
+    if count == 0 {
+        return Err(Error::Zero {
+            key: key.to_owned(),
+        });
+    }
+    Ok(count)
 }
 
 /// Returns the duration `millis` names, refusing zero under `key`.

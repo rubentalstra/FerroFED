@@ -14,23 +14,25 @@
 //! endpoint and `system_id`s, the resolver's members and every other boot
 //! check. A refresh that breaks one is refused: the running registry stays,
 //! the refusal is logged and counted as a refused reload, and the next
-//! refresh asks again from the same instant. A directory that does not
-//! answer leaves the running registry in place and shows on
-//! `/health/dependencies` as `directory`. A query never waits on the
+//! refresh asks again from the same instant. Each read and refresh ends at
+//! its deadline and its caps on pages, bytes and entries; one that runs past
+//! them, or whose answer breaks ITI-91, is refused and counted the same way.
+//! A directory that cannot be reached leaves the running registry in place;
+//! every outcome shows on `/health/dependencies` as `directory`. A query never waits on the
 //! directory. No specification governs the refresh policy: our own design.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use ferrofed_identity::directory::mcsd::{
-    Content, DirectoryConfig, DirectoryReadError, DirectorySource, ExchangeError, Materialised,
-    Refreshed,
+    Content, DirectoryConfig, DirectoryConfigError, DirectoryReadError, DirectorySource,
+    ExchangeError, Materialised, Refreshed,
 };
 use ferrofed_registry::snapshot::RegistrySnapshot;
 use openehr_its::rest::client::Credentials;
 
-use crate::config::settings::{DirectorySettings, Scheme};
-use crate::federation::FederationError;
+use crate::config::settings::{DirectorySettings, Scheme, Settings};
+use crate::federation::{FederationError, read_registry};
 use crate::health::dependencies::Observed;
 use crate::reload::{Applied, ReloadError, Reloader};
 
@@ -51,10 +53,12 @@ pub enum RefreshOutcome {
     Unchanged,
     /// The changed registry replaced the running one.
     Applied(Applied),
-    /// The changed registry was refused, and the running one stays.
+    /// The refresh was refused, and the running registry stays: the changed
+    /// registry breaks a rule, or the directory's answer ran past the deadline
+    /// or a cap, or does not hold to ITI-91.
     Refused(ReloadError),
-    /// The directory did not answer as ITI-91 asks, and the running registry
-    /// stays.
+    /// The directory could not be reached or refused the request, and the
+    /// running registry stays.
     Unreachable(ExchangeError),
 }
 
@@ -65,9 +69,8 @@ impl DirectoryRegistry {
     /// The read runs on a runtime of its own, so it blocks the caller.
     ///
     /// # Errors
-    /// [`FederationError::DirectorySource`] for a directory that cannot be
-    /// asked as configured, [`FederationError::DirectoryRuntime`] when the
-    /// read cannot run, and [`FederationError::Directory`] when the directory
+    /// [`FederationError::Directory`] for a directory that cannot be asked as
+    /// configured, a read that cannot run, and a directory that
     /// cannot be read or holds no valid registry.
     pub fn open(settings: &DirectorySettings) -> Result<(Self, RegistrySnapshot), FederationError> {
         let source = source(settings)?;
@@ -107,6 +110,13 @@ impl DirectoryRegistry {
                     error = crate::chain(&error),
                     "the care services directory could not be read; the running registry stays"
                 );
+                // NOTE: no specification governs this: our own design; an answer past
+                // the budget, or one that breaks ITI-91, is refused as a broken registry is.
+                if error.exceeded() || (error.answered() && error.status().is_none()) {
+                    return RefreshOutcome::Refused(reloader.directory_refused(directory_error(
+                        DirectoryFailure::Read(DirectoryReadError::Exchange(error)),
+                    )));
+                }
                 return RefreshOutcome::Unreachable(error);
             }
         };
@@ -127,7 +137,7 @@ impl DirectoryRegistry {
                 }
             }
             Refreshed::Refused(error) => RefreshOutcome::Refused(reloader.directory_refused(
-                FederationError::Directory(Box::new(DirectoryReadError::Registry(error))),
+                directory_error(DirectoryFailure::Read(DirectoryReadError::Registry(error))),
             )),
         }
     }
@@ -150,6 +160,48 @@ impl DirectoryRegistry {
 
     fn observe(&self, observed: Observed) {
         *self.observed.lock().unwrap_or_else(PoisonError::into_inner) = observed;
+    }
+}
+
+/// Why the registry could not be read from the care services directory.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DirectoryFailure {
+    /// The directory could not be read, or its content is no registry the
+    /// gateway admits.
+    #[error(transparent)]
+    Read(DirectoryReadError),
+    /// The directory cannot be asked as `[registry.mcsd]` describes it.
+    #[error("the care services directory of [registry.mcsd] cannot be asked")]
+    Source(#[source] DirectoryConfigError),
+    /// The runtime a read outside the server runs on could not be built.
+    #[error("the runtime for reading the care services directory could not be built")]
+    Runtime(#[source] std::io::Error),
+}
+
+/// `failure` as the federation error a boot or a reload reports.
+fn directory_error(failure: DirectoryFailure) -> FederationError {
+    FederationError::Directory(Box::new(failure))
+}
+
+/// The registry's first read and, when it comes from a care services
+/// directory, the directory the gateway then keeps it in step with.
+///
+/// A document is read as [`read_registry`] reads it; a directory is read
+/// once here, so the banner, the build and the refreshes share one read.
+#[must_use]
+pub fn read_source(
+    settings: &Settings,
+) -> (
+    Option<Result<RegistrySnapshot, FederationError>>,
+    Option<Arc<DirectoryRegistry>>,
+) {
+    match &settings.registry_directory {
+        None => (read_registry(settings), None),
+        Some(directory) => match DirectoryRegistry::open(directory) {
+            Ok((registry, snapshot)) => (Some(Ok(snapshot)), Some(Arc::new(registry))),
+            Err(error) => (Some(Err(error)), None),
+        },
     }
 }
 
@@ -182,9 +234,12 @@ fn source(settings: &DirectorySettings) -> Result<DirectorySource, FederationErr
     DirectorySource::new(DirectoryConfig {
         base: settings.url.clone(),
         credentials,
-        timeout: settings.timeout,
+        deadline: settings.deadline,
+        pages: settings.max_pages,
+        bytes: settings.max_bytes,
+        entries: settings.max_entries,
     })
-    .map_err(FederationError::DirectorySource)
+    .map_err(|source| directory_error(DirectoryFailure::Source(source)))
 }
 
 /// Reads `source` on a current-thread runtime of a thread of its own, so the
@@ -195,10 +250,10 @@ fn blocking(source: &DirectorySource) -> Result<Materialised, FederationError> {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(FederationError::DirectoryRuntime)?;
+                .map_err(|source| directory_error(DirectoryFailure::Runtime(source)))?;
             runtime
                 .block_on(source.read())
-                .map_err(|error| FederationError::Directory(Box::new(error)))
+                .map_err(|error| directory_error(DirectoryFailure::Read(error)))
         });
         match reading.join() {
             Ok(read) => read,

@@ -85,7 +85,6 @@ use axum::{Extension, Json, Router};
 use clap::Parser;
 use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_identity::dev::Profile;
-use ferrofed_registry::snapshot::RegistrySnapshot;
 use http::{HeaderMap, Method, StatusCode, Uri};
 use openehr_its::rest::routes::{self, Lookup};
 use tokio::net::TcpListener;
@@ -98,7 +97,7 @@ use crate::cli::{AdmissionCommand, Cli, Command, ConfigCommand};
 use crate::config::Config;
 use crate::config::settings::{ServerSettings, Settings};
 use crate::directory::DirectoryRegistry;
-use crate::federation::{Federation, FederationError};
+use crate::federation::Federation;
 use crate::health::lifecycle::{Lifecycle, drain_on};
 use crate::state::AppState;
 
@@ -160,8 +159,7 @@ where
         Command::Config {
             command: ConfigCommand::Check,
         } => match AppState::check(&settings).and_then(|cleartext| {
-            state::admits_callers(&settings, settings.federates())
-                .map(|()| cleartext)
+            state::admits_callers(&settings, settings.federates()).map(|()| cleartext)
         }) {
             Ok(cleartext) => config_checked(&cleartext),
             Err(error) => {
@@ -190,7 +188,7 @@ fn serve_job(settings: Settings, config: Option<PathBuf>) -> ExitCode {
     let stdout_is_terminal = std::io::stdout().is_terminal();
     let no_color = std::env::var_os("NO_COLOR");
     let format = settings.telemetry.format;
-    let (document, directory) = read_source(&settings);
+    let (document, directory) = directory::read_source(&settings);
     if banner::prints(format, stdout_is_terminal) {
         let described = document.as_ref().map(Result::as_ref);
         // NOTE: no specification governs this: our own design; a document that
@@ -255,27 +253,6 @@ fn serve_job(settings: Settings, config: Option<PathBuf>) -> ExitCode {
             tracing::error!(error = format!("{error:#}"), "cannot serve");
             ExitCode::FAILURE
         }
-    }
-}
-
-/// The registry's first read and, when it comes from a care services
-/// directory, the directory the gateway then keeps it in step with.
-///
-/// A document is read as [`federation::read_registry`] reads it; a directory
-/// is read once here, so the banner, the build and the refreshes share one
-/// read.
-fn read_source(
-    settings: &Settings,
-) -> (
-    Option<Result<RegistrySnapshot, FederationError>>,
-    Option<Arc<DirectoryRegistry>>,
-) {
-    match &settings.registry_directory {
-        None => (federation::read_registry(settings), None),
-        Some(directory) => match DirectoryRegistry::open(directory) {
-            Ok((registry, snapshot)) => (Some(Ok(snapshot)), Some(Arc::new(registry))),
-            Err(error) => (Some(Err(error)), None),
-        },
     }
 }
 

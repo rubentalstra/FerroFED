@@ -38,6 +38,7 @@ use ferrofed_registry::snapshot::RegistrySnapshot;
 use crate::config::settings::Settings;
 use crate::config::transport::{self, CleartextError, ProtectedSite};
 use crate::config::{CONFIG_PATH_ENV, Config};
+use crate::directory::DirectoryFailure;
 use crate::federation::{Federation, FederationError, Reconciled, read_registry};
 use crate::metrics::ReloadResult;
 use crate::state::AppState;
@@ -256,14 +257,14 @@ impl Reloader {
         needs_restart: Vec<&'static str>,
     ) -> Result<Applied, ReloadError> {
         let next = running
-            .reloaded_over(settings, document)
+            .reloaded(settings, document)
             .map_err(|source| ReloadError::Federation {
                 document: settings.registry_document.clone(),
                 source: Box::new(source),
             })?
             .ok_or(ReloadError::RegistryPresence)?;
         let cleartext =
-            transport::check(&effective, Some(next.snapshot())).map_err(ReloadError::Cleartext)?;
+            transport::check(settings, Some(next.snapshot())).map_err(ReloadError::Cleartext)?;
         let next = Arc::new(next);
         let (before, after) = (running.snapshot(), next.snapshot());
         let members_removed: Vec<NodeId> = before
@@ -535,13 +536,14 @@ fn federation_class(error: &FederationError) -> &'static str {
             FhirFormError::Read { .. } => "registry-unreadable",
             _ => "registry-invalid",
         },
-        FederationError::Directory(source) => match **source {
-            DirectoryReadError::Exchange(_) => "registry-unreadable",
-            _ => "registry-invalid",
+        FederationError::Directory(failure) => match &**failure {
+            DirectoryFailure::Read(DirectoryReadError::Exchange(error)) if error.exceeded() => {
+                "registry-budget"
+            }
+            DirectoryFailure::Read(DirectoryReadError::Exchange(_)) => "registry-unreadable",
+            DirectoryFailure::Read(_) => "registry-invalid",
+            _ => "registry-directory",
         },
-        FederationError::DirectorySource(_) | FederationError::DirectoryRuntime(_) => {
-            "registry-directory"
-        }
         FederationError::DevWithoutRegistry
         | FederationError::DevTable(_)
         | FederationError::DevCrossRef(_) => "dev-cross-reference",

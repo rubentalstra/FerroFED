@@ -49,6 +49,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod budget;
 pub mod client;
 pub mod directory;
 pub mod error;

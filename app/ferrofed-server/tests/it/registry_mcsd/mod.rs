@@ -44,10 +44,10 @@ pub(crate) fn member(name: &str, address: &str) -> Member {
 }
 
 /// The development configuration reading its registry from the directory at
-/// `base`, with `timeout_ms` per page, resolving the patient at both nodes.
-pub(crate) fn config(base: &str, timeout_ms: u64) -> String {
+/// `base`, with a deadline of `deadline_ms` per read, resolving the patient at both nodes.
+pub(crate) fn config(base: &str, deadline_ms: u64) -> String {
     format!(
-        "profile = \"development\"\n\n[registry.mcsd]\nurl = \"{base}\"\nrefresh_interval_s = 3600\ntimeout_ms = {timeout_ms}\n\n[federation]\nper_node_timeout_ms = 2000\noverall_timeout_ms = 3000\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{}",
+        "profile = \"development\"\n\n[registry.mcsd]\nurl = \"{base}\"\nrefresh_interval_s = 3600\ndeadline_ms = {deadline_ms}\n\n[federation]\nper_node_timeout_ms = 2000\noverall_timeout_ms = 3000\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{}",
         crossref(&[("node-a", EHR_A), ("node-b", EHR_B)])
     )
 }
@@ -65,9 +65,9 @@ impl Gateway {
     /// the directory, the state built over it, and a reloader beside it.
     pub(crate) fn boot(
         harness: &HarnessDirectory,
-        timeout_ms: u64,
+        deadline_ms: u64,
     ) -> Result<Self, Box<dyn Error>> {
-        Self::boot_from(&config(&harness.base(), timeout_ms))
+        Self::boot_from(&config(&harness.base(), deadline_ms))
     }
 
     /// Boots as [`Gateway::boot`] does, from the configuration `text`.

@@ -66,10 +66,11 @@ patient, is `up`, a failure answered below `500` is `up`, a `5xx` is
 `failing`, an XCPD exchange whose audit message could not be recorded is
 `failing`, and no answer, a silent localizer past its budget included, is
 `down`. It is absent when no localizer is configured
-([Node selection](registry.md#node-selection)). A refresh of the mCSD directory the registry
-is read from updates `directory`: an answer is `up`, a `5xx` or an answer
-that breaks ITI-90 or ITI-91 is `failing`, and no answer is `down`. It is
-absent when the registry is a document
+([Node selection](registry.md#node-selection)). A refresh of the mCSD
+directory the registry is read from updates `directory`: an answer is `up`, a
+`5xx`, an answer that breaks ITI-90 or ITI-91 or one past a cap is
+`failing`, and no answer before the deadline is `down`. It is absent when the
+registry is a document
 ([The registry](registry.md#the-registry-read-from-an-mcsd-directory)). The
 body names endpoint ids and states only, never a URL, a credential or a
 body.

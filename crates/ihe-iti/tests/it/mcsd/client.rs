@@ -8,13 +8,12 @@
 use ihe_iti::mcsd::client::{CareResource, CareService, McsdClient, Version};
 use ihe_iti::mcsd::error::{Malformation, McsdError};
 use ihe_iti::outcome::IssueType;
-use jiff::Timestamp;
 use url::Url;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    BASE, FHIR_JSON, PROMPT, bundle, client, deletion, endpoint, full_url, matched, organization,
+    BASE, FHIR_JSON, budget, bundle, client, deletion, endpoint, full_url, matched, organization,
     version,
 };
 
@@ -81,7 +80,7 @@ async fn a_search_reads_every_page_and_the_first_pages_date() {
     .await;
 
     let found = client(&server)
-        .find(CareService::Organization, &[], PROMPT)
+        .find(CareService::Organization, &[], &mut budget())
         .await
         .expect("both pages read");
     let ids: Vec<Option<&str>> = found
@@ -90,10 +89,7 @@ async fn a_search_reads_every_page_and_the_first_pages_date() {
         .map(|found| found.resource().logical_id())
         .collect();
     assert_eq!(vec![Some("org-a"), Some("org-b")], ids);
-    assert_eq!(
-        Some("1994-11-06T08:49:37Z".to_owned()),
-        found.answered_at().map(|at| at.to_string())
-    );
+    assert_eq!(Some("Sun, 06 Nov 1994 08:49:37 GMT"), found.answered_at());
 }
 
 #[tokio::test]
@@ -113,7 +109,7 @@ async fn a_search_sends_its_parameters() {
         .find(
             CareService::Endpoint,
             &[("identifier", "urn:oid:2.999.11|")],
-            PROMPT,
+            &mut budget(),
         )
         .await
         .expect("an empty searchset");
@@ -123,7 +119,7 @@ async fn a_search_sends_its_parameters() {
 #[tokio::test]
 async fn a_history_reads_versions_and_deletions_newest_first_since_an_instant() {
     let server = MockServer::start().await;
-    let since: Timestamp = "2026-10-01T12:00:00Z".parse().expect("an instant");
+    let since = "2026-10-01T12:00:00Z";
     let address = "https://cdr-a.example.org/openehr";
     Mock::given(method("GET"))
         .and(path(format!("{BASE}Endpoint/_history")))
@@ -152,7 +148,7 @@ async fn a_history_reads_versions_and_deletions_newest_first_since_an_instant() 
         .await;
 
     let updates = client(&server)
-        .updates(CareService::Endpoint, since, PROMPT)
+        .updates(CareService::Endpoint, since, &mut budget())
         .await
         .expect("a history");
     let [deleted, current] = updates.changes() else {
@@ -183,7 +179,7 @@ async fn a_refused_request_keeps_the_issue_codes_and_drops_the_text() {
     )
     .await;
     let error = client(&server)
-        .find(CareService::Organization, &[], PROMPT)
+        .find(CareService::Organization, &[], &mut budget())
         .await
         .expect_err("a 503 is no answer");
     let McsdError::Rejected { status, issues } = &error else {
@@ -222,7 +218,7 @@ async fn an_answer_that_is_not_the_interactions_bundle_is_refused() {
         let server = MockServer::start().await;
         answering(&server, &format!("{BASE}Endpoint"), 200, media, body, None).await;
         let error = client(&server)
-            .find(CareService::Endpoint, &[], PROMPT)
+            .find(CareService::Endpoint, &[], &mut budget())
             .await
             .expect_err("refused");
         assert!(
@@ -252,7 +248,7 @@ async fn a_match_of_another_type_or_without_a_full_url_is_refused() {
     )
     .await;
     let error = client(&server)
-        .find(CareService::Organization, &[], PROMPT)
+        .find(CareService::Organization, &[], &mut budget())
         .await
         .expect_err("an Endpoint is no Organization");
     assert!(matches!(
@@ -278,7 +274,7 @@ async fn a_match_of_another_type_or_without_a_full_url_is_refused() {
     )
     .await;
     let error = client(&server)
-        .find(CareService::Organization, &[], PROMPT)
+        .find(CareService::Organization, &[], &mut budget())
         .await
         .expect_err("a match needs its fullUrl");
     assert!(matches!(
@@ -289,7 +285,7 @@ async fn a_match_of_another_type_or_without_a_full_url_is_refused() {
 
 #[tokio::test]
 async fn a_history_entry_without_a_request_or_deleting_another_type_is_refused() {
-    let since: Timestamp = "2026-10-01T12:00:00Z".parse().expect("an instant");
+    let since = "2026-10-01T12:00:00Z";
     let cases = [
         (
             format!(
@@ -319,7 +315,7 @@ async fn a_history_entry_without_a_request_or_deleting_another_type_is_refused()
         )
         .await;
         let error = client(&server)
-            .updates(CareService::Endpoint, since, PROMPT)
+            .updates(CareService::Endpoint, since, &mut budget())
             .await
             .expect_err("refused");
         assert!(
@@ -347,7 +343,7 @@ async fn a_page_link_to_another_origin_is_not_followed() {
     )
     .await;
     let error = client(&server)
-        .find(CareService::Organization, &[], PROMPT)
+        .find(CareService::Organization, &[], &mut budget())
         .await
         .expect_err("the link leaves the directory");
     assert!(matches!(error, McsdError::ForeignPage));
@@ -365,7 +361,7 @@ async fn an_unreachable_directory_did_not_answer() {
     )
     .expect("a client");
     let error = client
-        .find(CareService::Organization, &[], PROMPT)
+        .find(CareService::Organization, &[], &mut budget())
         .await
         .expect_err("nothing listens");
     assert!(!error.answered(), "{error:?}");

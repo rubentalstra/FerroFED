@@ -96,14 +96,26 @@ pub enum McsdError {
     /// the client does not follow it.
     #[error("the page link points away from the directory")]
     ForeignPage,
-    /// The answer runs to more pages than the client reads.
+    /// The answer runs to more pages than the budget allows.
     #[error("the answer runs to more than {limit} pages")]
     TooManyPages {
         /// The limit, in pages.
         limit: usize,
     },
-    /// No answer arrived within the timeout.
-    #[error("the directory did not answer within the timeout")]
+    /// The answer bodies run to more bytes than the budget allows.
+    #[error("the answer runs to more than {limit} bytes")]
+    TooLarge {
+        /// The limit, in bytes.
+        limit: usize,
+    },
+    /// The answer holds more entries than the budget allows.
+    #[error("the answer holds more than {limit} entries")]
+    TooManyEntries {
+        /// The limit, in entries.
+        limit: usize,
+    },
+    /// The whole answer did not arrive before the budget's deadline.
+    #[error("the directory did not answer before the deadline")]
     Timeout,
     /// The request could not be sent or the answer could not be read.
     #[error("the directory could not be reached")]
@@ -124,11 +136,25 @@ impl McsdError {
         }
     }
 
-    /// Whether the directory answered at all: `false` for a timeout and for
-    /// a request that could not be sent or whose answer could not be read.
+    /// Whether the directory answered at all: `false` for a deadline that
+    /// passed and for a request that could not be sent or whose answer could
+    /// not be read.
     #[must_use]
     pub fn answered(&self) -> bool {
         !matches!(self, Self::Timeout | Self::Transport(_))
+    }
+
+    /// Whether the read ran out of its budget: its deadline, its pages, its
+    /// bytes or its entries.
+    #[must_use]
+    pub fn exceeded(&self) -> bool {
+        matches!(
+            self,
+            Self::Timeout
+                | Self::TooManyPages { .. }
+                | Self::TooLarge { .. }
+                | Self::TooManyEntries { .. }
+        )
     }
 }
 
@@ -145,12 +171,6 @@ pub enum Malformation {
     /// The answer's media type is not FHIR JSON.
     #[error("the answer is not application/fhir+json")]
     NotFhirJson,
-    /// A page is longer than the client reads.
-    #[error("a page exceeds {limit} bytes")]
-    TooLarge {
-        /// The limit, in bytes.
-        limit: usize,
-    },
     /// The answer is not JSON.
     #[error("the answer is not JSON (line {line}, column {column})")]
     NotJson {

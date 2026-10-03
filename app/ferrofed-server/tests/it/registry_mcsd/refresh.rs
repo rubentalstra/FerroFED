@@ -223,7 +223,8 @@ async fn a_refresh_that_deletes_a_listed_endpoint_is_refused_and_the_registry_ke
 }
 
 #[tokio::test]
-async fn a_directory_that_does_not_answer_keeps_the_snapshot_and_shows_down() -> TestResult {
+async fn a_directory_that_does_not_answer_in_time_keeps_the_snapshot_and_shows_down() -> TestResult
+{
     let a = node_answering("uid-a::cdr-a.example.org::1").await;
     let b = node_answering("uid-b::cdr-b.example.org::1").await;
     let harness = HarnessDirectory::start().await;
@@ -234,10 +235,10 @@ async fn a_directory_that_does_not_answer_keeps_the_snapshot_and_shows_down() ->
 
     harness.outage(Some(Outage::Silent));
     let outcome = gateway.directory.refresh(&gateway.reloader).await;
-    assert!(
-        matches!(outcome, RefreshOutcome::Unreachable(_)),
-        "{outcome:?}"
-    );
+    let RefreshOutcome::Refused(error) = &outcome else {
+        return Err(format!("a silent directory runs past the deadline: {outcome:?}").into());
+    };
+    assert_eq!("registry-budget", error.class());
     assert_eq!(before, gateway.addresses()?, "the running registry stays");
     assert_eq!(Some("down".to_owned()), directory_state(&gateway).await?);
     assert_eq!(
@@ -248,7 +249,11 @@ async fn a_directory_that_does_not_answer_keeps_the_snapshot_and_shows_down() ->
         asked(&gateway).await?,
         "a query never waits on the directory"
     );
-    assert_eq!(Some("0".to_owned()), reloads(&gateway, "refused")?);
+    assert_eq!(
+        Some("1".to_owned()),
+        reloads(&gateway, "refused")?,
+        "a refresh past its deadline counts as refused"
+    );
 
     harness.outage(Some(Outage::Refusing));
     let outcome = gateway.directory.refresh(&gateway.reloader).await;
@@ -326,5 +331,35 @@ async fn the_registry_keeps_in_step_every_interval() -> TestResult {
     }
     stepping.abort();
     assert!(moved(), "the change reached the running registry");
+    Ok(())
+}
+
+/// A refresh whose answer runs past a cap is refused like a broken registry:
+/// the running registry stays, the refusal is counted, and the directory
+/// shows as failing (no specification governs the caps: our own design).
+#[tokio::test]
+async fn a_refresh_past_a_cap_is_refused_counted_and_shown() -> TestResult {
+    let harness = HarnessDirectory::start().await;
+    harness.publish(&members(
+        "https://cdr-a.example.org/openehr",
+        "https://cdr-b.example.org/openehr",
+    ))?;
+    let text = super::config(&harness.base(), 5_000)
+        .replace("deadline_ms = 5000", "deadline_ms = 5000\nmax_entries = 4");
+    let gateway = Gateway::boot_from(&text)?;
+    let before = gateway.addresses()?;
+    for round in 0..5 {
+        harness.put_endpoint(
+            member("b", &format!("https://cdr-b{round}.example.org/openehr")).endpoint()?,
+        );
+    }
+    let outcome = gateway.directory.refresh(&gateway.reloader).await;
+    let RefreshOutcome::Refused(error) = &outcome else {
+        return Err(format!("five versions pass a cap of four entries: {outcome:?}").into());
+    };
+    assert_eq!("registry-budget", error.class());
+    assert_eq!(before, gateway.addresses()?, "the running registry stays");
+    assert_eq!(Some("1".to_owned()), reloads(&gateway, "refused")?);
+    assert_eq!(Some("failing".to_owned()), directory_state(&gateway).await?);
     Ok(())
 }

@@ -5,6 +5,7 @@
 //! stub directory, the client held to the vendored capability statements and
 //! profiles, and the replica kept in step with ITI-91.
 
+mod budget;
 mod client;
 mod contract;
 mod directory;
@@ -12,8 +13,9 @@ mod replica;
 
 use std::fmt::Write;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use ihe_iti::mcsd::budget::{Budget, Limits};
 use ihe_iti::mcsd::client::McsdClient;
 use url::Url;
 use wiremock::MockServer;
@@ -21,8 +23,11 @@ use wiremock::MockServer;
 /// The FHIR base the stub directory serves under.
 pub(crate) const BASE: &str = "/fhir/";
 
-/// The timeout of a request the stub answers at once.
-pub(crate) const PROMPT: Duration = Duration::from_secs(5);
+/// A budget for a stub that answers at once: five seconds and the default
+/// caps.
+pub(crate) fn budget() -> Budget {
+    Budget::new(Instant::now() + Duration::from_secs(5), Limits::default())
+}
 
 /// The FHIR JSON media type.
 pub(crate) const FHIR_JSON: &str = "application/fhir+json";

@@ -919,8 +919,12 @@ registry goes through `Federation::reloaded_over`, the reload's own checks,
 with the settings the last reload applied: it replaces the running one, or
 it is refused, logged and counted as a refused reload with the running
 registry kept, and the content advances only with an applied registry, so the
-next refresh asks from the same instant. A directory that does not answer
-keeps the registry and shows as `directory` on `/health/dependencies`. At
+next refresh asks from the same instant. Each read and refresh draws on one
+`ihe-iti` budget: a deadline for the whole walk, and caps on its pages, bytes
+and entries (30 seconds, 200, 64 MiB and 50,000 by default); running past one
+is refused and counted the same way, and a partial answer never becomes the
+registry. A directory that cannot be reached keeps the registry, and every
+outcome shows as `directory` on `/health/dependencies`. At
 boot a directory that cannot be read, or holds no valid registry, stops the
 start, as a document that does not load does. A `SIGHUP` rebuilds the
 federation over the registry in place and never asks the directory, and a

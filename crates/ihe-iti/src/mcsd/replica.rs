@@ -5,37 +5,27 @@
 //! with ITI-90 and kept in step with ITI-91.
 //!
 //! [`Replica::read`] finds every resource in scope with ITI-90.
-//! [`Replica::refreshed`] asks ITI-91 for the versions created since the last
-//! read and applies them: for each logical id the newest version wins, a
-//! deletion removes the resource, and a version that has left the scope
-//! removes it too. A replica that does not know since when to ask reads
-//! everything again. A replica is a value: a refresh returns a new one and
+//! [`Replica::refreshed`] asks ITI-91 for the versions created since an instant
+//! the caller chooses, usually from the directory's own clock reading at the
+//! last read ([`Replica::answered_at`]), and applies them: for each logical id
+//! the newest version wins, a deletion removes the resource, and a version
+//! that has left the scope removes it too. With no instant it reads everything
+//! again. Every read draws on one [`Budget`], and a read that runs out of it
+//! is an error, never a shorter replica. A replica is a value: a refresh returns a new one and
 //! leaves the old one as it was, so a caller keeps the content it trusts until
 //! it has checked the new content.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::time::Duration;
 
 use fhir_types::r4::endpoint::Endpoint;
 use fhir_types::r4::organization::Organization;
-use jiff::{SignedDuration, Timestamp};
 
+use super::budget::Budget;
 use super::client::{CareResource, CareService, Found, McsdClient, Updates, Version};
 use super::directory::Directory;
 use super::error::{DirectoryError, McsdError};
 use crate::search::escape;
-
-/// How far before the directory's own clock reading the next ITI-91 request
-/// asks from.
-///
-/// `_since` includes every version created at or after the instant (FHIR R4
-/// history), and a version applied twice leaves the replica unchanged, so the
-/// overlap costs a re-read of recent versions and covers a version committed
-/// while the previous answer was being written.
-// NOTE: no specification governs this: our own design; ITI-91 leaves the
-// instant to the Update Client (§3.91.4.1.1, "business rules").
-pub const OVERLAP: SignedDuration = SignedDuration::from_secs(60);
 
 /// Which resources of the directory the replica holds.
 ///
@@ -92,7 +82,7 @@ pub struct Replica {
     scope: Scope,
     organizations: BTreeMap<String, (String, Organization)>,
     endpoints: BTreeMap<String, (String, Endpoint)>,
-    since: Option<Timestamp>,
+    answered_at: Option<String>,
 }
 
 /// What a refresh found.
@@ -117,23 +107,23 @@ impl Refresh {
 
 impl Replica {
     /// Reads every resource in `scope` from the directory `client` asks,
-    /// with ITI-90; `timeout` bounds each page.
+    /// with ITI-90, both searches drawing on `budget`.
     ///
     /// # Errors
     /// The [`McsdError`] of the first search that fails.
     pub async fn read(
         client: &McsdClient,
         scope: Scope,
-        timeout: Duration,
+        budget: &mut Budget,
     ) -> Result<Self, McsdError> {
-        let organizations = find(client, &scope, CareService::Organization, timeout).await?;
-        let endpoints = find(client, &scope, CareService::Endpoint, timeout).await?;
-        let since = earliest(organizations.answered_at(), endpoints.answered_at());
+        let organizations = find(client, &scope, CareService::Organization, budget).await?;
+        let endpoints = find(client, &scope, CareService::Endpoint, budget).await?;
+        let answered_at = organizations.answered_at().map(str::to_owned);
         let mut replica = Self {
             scope,
             organizations: BTreeMap::new(),
             endpoints: BTreeMap::new(),
-            since: since.map(before),
+            answered_at,
         };
         for found in organizations
             .into_matches()
@@ -146,9 +136,9 @@ impl Replica {
         Ok(replica)
     }
 
-    /// Asks the directory for what changed since this replica was read, with
-    /// ITI-91, or reads everything again with ITI-90 when the replica does
-    /// not know since when to ask; `timeout` bounds each page.
+    /// Asks the directory for what changed at or after `since`, a FHIR
+    /// `instant` as written, with ITI-91, or reads everything again with
+    /// ITI-90 when `since` is `None`; every request draws on `budget`.
     ///
     /// # Errors
     /// The [`McsdError`] of the first request that fails; this replica is
@@ -156,10 +146,11 @@ impl Replica {
     pub async fn refreshed(
         &self,
         client: &McsdClient,
-        timeout: Duration,
+        since: Option<&str>,
+        budget: &mut Budget,
     ) -> Result<Refresh, McsdError> {
-        let Some(since) = self.since else {
-            let read = Self::read(client, self.scope.clone(), timeout).await?;
+        let Some(since) = since else {
+            let read = Self::read(client, self.scope.clone(), budget).await?;
             return Ok(if read.same_content(self) {
                 Refresh::Unchanged(read)
             } else {
@@ -167,13 +158,11 @@ impl Replica {
             });
         };
         let organizations = client
-            .updates(CareService::Organization, since, timeout)
+            .updates(CareService::Organization, since, budget)
             .await?;
-        let endpoints = client
-            .updates(CareService::Endpoint, since, timeout)
-            .await?;
+        let endpoints = client.updates(CareService::Endpoint, since, budget).await?;
         let mut next = self.clone();
-        next.since = earliest(organizations.answered_at(), endpoints.answered_at()).map(before);
+        next.answered_at = organizations.answered_at().map(str::to_owned);
         next.apply(CareService::Organization, organizations);
         next.apply(CareService::Endpoint, endpoints);
         Ok(if next.same_content(self) {
@@ -196,11 +185,12 @@ impl Replica {
         )
     }
 
-    /// The instant the next ITI-91 request asks from, on the directory's
-    /// clock; `None` when the next refresh reads everything again.
+    /// The `Date` the directory stamped the first answer of the last read or
+    /// refresh with, as written: the directory's own clock reading before any
+    /// of that read's content; `None` when it sent none.
     #[must_use]
-    pub fn since(&self) -> Option<Timestamp> {
-        self.since
+    pub fn answered_at(&self) -> Option<&str> {
+        self.answered_at.as_deref()
     }
 
     /// How many `Organization`s and `Endpoint`s the replica holds.
@@ -279,7 +269,7 @@ impl fmt::Debug for Replica {
             .field("scope", &self.scope)
             .field("organizations", &self.organizations.len())
             .field("endpoints", &self.endpoints.len())
-            .field("since", &self.since)
+            .field("answered_at", &self.answered_at)
             .finish()
     }
 }
@@ -289,25 +279,15 @@ async fn find(
     client: &McsdClient,
     scope: &Scope,
     kind: CareService,
-    timeout: Duration,
+    budget: &mut Budget,
 ) -> Result<Found, McsdError> {
     match scope.system(kind) {
         Some(system) => {
             let token = format!("{}|", escape(system));
             client
-                .find(kind, &[("identifier", token.as_str())], timeout)
+                .find(kind, &[("identifier", token.as_str())], budget)
                 .await
         }
-        None => client.find(kind, &[], timeout).await,
+        None => client.find(kind, &[], budget).await,
     }
-}
-
-/// The earlier of two clock readings, or `None` when either is missing.
-fn earliest(first: Option<Timestamp>, second: Option<Timestamp>) -> Option<Timestamp> {
-    Some(first?.min(second?))
-}
-
-/// The instant [`OVERLAP`] before `at`, or the earliest instant there is.
-fn before(at: Timestamp) -> Timestamp {
-    at.checked_sub(OVERLAP).unwrap_or(Timestamp::MIN)
 }

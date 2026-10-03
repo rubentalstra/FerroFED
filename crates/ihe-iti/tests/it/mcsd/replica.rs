@@ -1,18 +1,17 @@
 // SPDX-FileCopyrightText: Vernum Projecten B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The replica: read in scope with ITI-90, kept in step with ITI-91 since the
-//! directory's own clock reading, the newest version winning, and read again
-//! whole when the directory gave no clock reading it can read.
+//! The replica: read in scope with ITI-90, kept in step with ITI-91 since an
+//! instant the caller chooses, the newest version winning, read again whole
+//! when no instant is given, and every read held to its budget.
 
 use ihe_iti::mcsd::directory::Directory;
-use ihe_iti::mcsd::replica::{OVERLAP, Refresh, Replica, Scope};
-use jiff::Timestamp;
+use ihe_iti::mcsd::replica::{Refresh, Replica, Scope};
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    BASE, ENDPOINT_SYSTEM, FHIR_JSON, ORG_SYSTEM, PROMPT, bundle, client, deletion, endpoint,
+    BASE, ENDPOINT_SYSTEM, FHIR_JSON, ORG_SYSTEM, budget, bundle, client, deletion, endpoint,
     matched, organization, version,
 };
 
@@ -111,7 +110,7 @@ async fn seeded(reads: u64) -> MockServer {
 }
 
 #[tokio::test]
-async fn a_read_holds_the_resources_in_scope_and_asks_from_before_the_directorys_clock() {
+async fn a_read_holds_the_resources_in_scope_and_keeps_the_directorys_clock_reading() {
     let organizations = vec![organization_entry("org-a", &["ep-a"])];
     let endpoints = vec![
         endpoint_entry("ep-a", "https://cdr-a.example.org/openehr"),
@@ -121,7 +120,7 @@ async fn a_read_holds_the_resources_in_scope_and_asks_from_before_the_directorys
         ),
     ];
     let server = directory(&organizations, &endpoints, Some(READ_AT), 1).await;
-    let replica = Replica::read(&client(&server), scope(), PROMPT)
+    let replica = Replica::read(&client(&server), scope(), &mut budget())
         .await
         .expect("a replica");
     assert_eq!(
@@ -129,18 +128,14 @@ async fn a_read_holds_the_resources_in_scope_and_asks_from_before_the_directorys
         replica.len(),
         "the Endpoint out of scope is left out"
     );
-    let read_at: Timestamp = "2026-10-01T12:00:00Z".parse().expect("an instant");
-    assert_eq!(
-        Some(read_at.checked_sub(OVERLAP).expect("an instant")),
-        replica.since()
-    );
+    assert_eq!(Some(READ_AT), replica.answered_at());
 }
 
 #[tokio::test]
 async fn a_refresh_applies_only_the_changes_since_the_last_read() {
     let server = seeded(1).await;
     let client = client(&server);
-    let replica = Replica::read(&client, scope(), PROMPT)
+    let replica = Replica::read(&client, scope(), &mut budget())
         .await
         .expect("a replica");
     let since = "2026-10-01T11:59:00Z";
@@ -176,7 +171,10 @@ async fn a_refresh_applies_only_the_changes_since_the_last_read() {
     )
     .await;
 
-    let Refresh::Changed(next) = replica.refreshed(&client, PROMPT).await.expect("a refresh")
+    let Refresh::Changed(next) = replica
+        .refreshed(&client, Some("2026-10-01T11:59:00Z"), &mut budget())
+        .await
+        .expect("a refresh")
     else {
         panic!("the history changed an endpoint");
     };
@@ -189,11 +187,7 @@ async fn a_refresh_applies_only_the_changes_since_the_last_read() {
         addresses(&directory),
         "the newest version of ep-a wins and ep-b, which did not change, stays"
     );
-    let refreshed_at: Timestamp = "2026-10-01T13:00:00Z".parse().expect("an instant");
-    assert_eq!(
-        Some(refreshed_at.checked_sub(OVERLAP).expect("an instant")),
-        next.since()
-    );
+    assert_eq!(Some(REFRESHED_AT), next.answered_at());
     let held = replica.directory().expect("directory content");
     assert_eq!(
         Some(Some("https://cdr-a.example.org/openehr")),
@@ -206,7 +200,7 @@ async fn a_refresh_applies_only_the_changes_since_the_last_read() {
 async fn a_deletion_and_a_version_leaving_the_scope_remove_their_resources() {
     let server = seeded(1).await;
     let client = client(&server);
-    let replica = Replica::read(&client, scope(), PROMPT)
+    let replica = Replica::read(&client, scope(), &mut budget())
         .await
         .expect("a replica");
     let since = "2026-10-01T11:59:00Z";
@@ -232,7 +226,7 @@ async fn a_deletion_and_a_version_leaving_the_scope_remove_their_resources() {
     )
     .await;
     let next = replica
-        .refreshed(&client, PROMPT)
+        .refreshed(&client, Some("2026-10-01T11:59:00Z"), &mut budget())
         .await
         .expect("a refresh")
         .into_replica();
@@ -243,7 +237,7 @@ async fn a_deletion_and_a_version_leaving_the_scope_remove_their_resources() {
 async fn a_history_of_resources_out_of_scope_changes_nothing() {
     let server = seeded(1).await;
     let client = client(&server);
-    let replica = Replica::read(&client, scope(), PROMPT)
+    let replica = Replica::read(&client, scope(), &mut budget())
         .await
         .expect("a replica");
     let since = "2026-10-01T11:59:00Z";
@@ -260,30 +254,33 @@ async fn a_history_of_resources_out_of_scope_changes_nothing() {
         )],
     )
     .await;
-    let refresh = replica.refreshed(&client, PROMPT).await.expect("a refresh");
+    let refresh = replica
+        .refreshed(&client, Some("2026-10-01T11:59:00Z"), &mut budget())
+        .await
+        .expect("a refresh");
     let Refresh::Unchanged(next) = refresh else {
         panic!("nothing in scope changed: {refresh:?}");
     };
     assert_eq!(replica.len(), next.len());
-    assert_ne!(
-        replica.since(),
-        next.since(),
-        "the next refresh asks from later"
+    assert_eq!(
+        Some(REFRESHED_AT),
+        next.answered_at(),
+        "the next refresh can ask from later"
     );
 }
 
-/// The stub server stamps a `Date` of its own on an answer that has none
-/// (RFC 9110 §6.6.1), so the unusable reading is one that does not parse.
 #[tokio::test]
-async fn a_directory_whose_clock_reading_does_not_parse_is_read_again_whole() {
+async fn a_refresh_with_no_instant_reads_everything_again() {
     let organizations = vec![organization_entry("org-a", &["ep-a"])];
     let endpoints = vec![endpoint_entry("ep-a", "https://cdr-a.example.org/openehr")];
-    let server = directory(&organizations, &endpoints, Some("yesterday"), 2).await;
+    let server = directory(&organizations, &endpoints, Some(READ_AT), 2).await;
     let client = client(&server);
-    let replica = Replica::read(&client, scope(), PROMPT)
+    let replica = Replica::read(&client, scope(), &mut budget())
         .await
         .expect("a replica");
-    assert_eq!(None, replica.since());
-    let refresh = replica.refreshed(&client, PROMPT).await.expect("a refresh");
+    let refresh = replica
+        .refreshed(&client, None, &mut budget())
+        .await
+        .expect("a refresh");
     assert!(matches!(refresh, Refresh::Unchanged(_)), "{refresh:?}");
 }

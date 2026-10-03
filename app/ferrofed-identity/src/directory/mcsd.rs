@@ -15,14 +15,17 @@
 //! specification governs the selection by identifier system: our own design.
 
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrofed_registry::secret::SecretUrl;
 use ferrofed_registry::snapshot::RegistrySnapshot;
 use http::header::{AUTHORIZATION, HeaderMap};
+use ihe_iti::mcsd::budget::{Budget, Limits};
 use ihe_iti::mcsd::client::McsdClient;
 use ihe_iti::mcsd::error::{InvalidBase, McsdError};
 use ihe_iti::mcsd::replica::{Refresh, Replica, Scope};
+use jiff::fmt::rfc2822::DateTimeParser;
+use jiff::{SignedDuration, Timestamp};
 use openehr_its::rest::client::{Credentials, InvalidCredentials};
 use thiserror::Error;
 use url::Url;
@@ -39,8 +42,15 @@ pub struct DirectoryConfig {
     /// The credentials the gateway sends, when the transport does not
     /// authenticate it (ITI TF-2 Appendix Z.8).
     pub credentials: Option<Credentials>,
-    /// How long one page of an ITI-90 or ITI-91 answer may take.
-    pub timeout: Duration,
+    /// How long one whole read or refresh may take, over every page of both
+    /// resource types.
+    pub deadline: Duration,
+    /// The most pages one read or refresh may read.
+    pub pages: usize,
+    /// The most bytes of answer bodies one read or refresh may read.
+    pub bytes: usize,
+    /// The most Bundle entries one read or refresh may read.
+    pub entries: usize,
 }
 
 /// A directory source that cannot be built.
@@ -92,6 +102,13 @@ impl ExchangeError {
     #[must_use]
     pub fn answered(&self) -> bool {
         self.0.answered()
+    }
+
+    /// Whether the read ran out of its budget: its deadline, its pages, its
+    /// bytes or its entries.
+    #[must_use]
+    pub fn exceeded(&self) -> bool {
+        self.0.exceeded()
     }
 }
 
@@ -161,7 +178,8 @@ pub enum Refreshed {
 /// client, whose default headers hold the credentials.
 pub struct DirectorySource {
     client: McsdClient,
-    timeout: Duration,
+    deadline: Duration,
+    limits: Limits,
 }
 
 impl DirectorySource {
@@ -188,19 +206,24 @@ impl DirectorySource {
         let client = McsdClient::new(base, http).map_err(DirectoryConfigError::Base)?;
         Ok(Self {
             client,
-            timeout: config.timeout,
+            deadline: config.deadline,
+            limits: Limits {
+                pages: config.pages,
+                bytes: config.bytes,
+                entries: config.entries,
+            },
         })
     }
 
     /// Reads the members from the directory with ITI-90 and checks them as a
-    /// registry.
+    /// registry, within the deadline and the caps.
     ///
     /// # Errors
     /// [`DirectoryReadError::Exchange`] when the directory cannot be read,
     /// and [`DirectoryReadError::Registry`] when its content is no registry
     /// the gateway admits.
     pub async fn read(&self) -> Result<Materialised, DirectoryReadError> {
-        let replica = Replica::read(&self.client, scope(), self.timeout)
+        let replica = Replica::read(&self.client, scope(), &mut self.budget())
             .await
             .map_err(|error| DirectoryReadError::Exchange(ExchangeError(error)))?;
         let snapshot = snapshot_of(&replica).map_err(DirectoryReadError::Registry)?;
@@ -211,7 +234,12 @@ impl DirectorySource {
     }
 
     /// Asks the directory what changed since `held` was read, with ITI-91,
-    /// and checks the changed content as a registry.
+    /// and checks the changed content as a registry, within the deadline and
+    /// the caps.
+    ///
+    /// It asks from [`OVERLAP`] before the `Date` the directory stamped the
+    /// first answer of that read with, and reads everything again with ITI-90
+    /// when the directory sent no `Date` it can read.
     ///
     /// # Errors
     /// The [`ExchangeError`] of an exchange that failed; `held` stays as it
@@ -219,7 +247,11 @@ impl DirectorySource {
     pub async fn refresh(&self, held: &Content) -> Result<Refreshed, ExchangeError> {
         match held
             .0
-            .refreshed(&self.client, self.timeout)
+            .refreshed(
+                &self.client,
+                since(held.0.answered_at()).as_deref(),
+                &mut self.budget(),
+            )
             .await
             .map_err(ExchangeError)?
         {
@@ -238,13 +270,45 @@ impl DirectorySource {
     }
 }
 
+impl DirectorySource {
+    /// A budget for one read or refresh, starting now.
+    fn budget(&self) -> Budget {
+        Budget::new(Instant::now() + self.deadline, self.limits)
+    }
+}
+
 impl fmt::Debug for DirectorySource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DirectorySource")
             .field("client", &self.client)
-            .field("timeout", &self.timeout)
+            .field("deadline", &self.deadline)
+            .field("limits", &self.limits)
             .finish()
     }
+}
+
+/// How far before the directory's own clock reading a refresh asks from.
+///
+/// `_since` includes every version created at or after the instant (FHIR R4
+/// history), and a version applied twice changes nothing, so the overlap
+/// costs a re-read of recent versions and covers one committed while the
+/// previous answer was written.
+// NOTE: no specification governs this: our own design; ITI-91 leaves the
+// instant to the Update Client (§3.91.4.1.1, "business rules").
+pub const OVERLAP: SignedDuration = SignedDuration::from_secs(60);
+
+/// The FHIR `instant` [`OVERLAP`] before the HTTP `Date` `answered_at`
+/// (RFC 9110 §5.6.7), or `None` when there is none to read.
+// NOTE: RFC 9110 §6.6.1: a Date that does not parse is treated as absent, which
+// only makes the next refresh a full read, never a narrower one.
+fn since(answered_at: Option<&str>) -> Option<String> {
+    static PARSER: DateTimeParser = DateTimeParser::new();
+    let at = PARSER.parse_timestamp(answered_at?).ok()?;
+    Some(
+        at.checked_sub(OVERLAP)
+            .unwrap_or(Timestamp::MIN)
+            .to_string(),
+    )
 }
 
 /// The directory resources that are the federation's.

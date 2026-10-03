@@ -9,29 +9,26 @@ use fhir_types::codec::{Json, Object, Path, Value};
 use fhir_types::r4::bundle::{Bundle, BundleEntry, BundleLink};
 use fhir_types::r4::resource::Resource;
 use http::StatusCode;
-use jiff::Timestamp;
 use url::Url;
 
 use super::{CareResource, CareService, Change, Match, Version};
+use crate::mcsd::budget::Budget;
 use crate::mcsd::error::{Malformation, McsdError};
 use crate::outcome;
-
-/// The longest page the client reads.
-// NOTE: no specification governs this: our own design, a bound on what one
-// page costs to read and decode.
-const LIMIT: usize = 8 << 20;
 
 /// One page the directory answered `200` with.
 pub(super) struct Page {
     /// The body.
     pub(super) body: Vec<u8>,
     /// The `Date` of the answer.
-    pub(super) date: Option<Timestamp>,
+    pub(super) date: Option<String>,
 }
 
 /// The matches of one `searchset` page and its `next` link.
 pub(super) struct Searchset {
     pub(super) matches: Vec<Match>,
+    /// How many entries the page held, outcomes included.
+    pub(super) entries: usize,
     pub(super) next: Option<Url>,
 }
 
@@ -52,24 +49,17 @@ pub(super) fn transport(error: reqwest::Error) -> McsdError {
     }
 }
 
-/// Reads the answer's body, refusing one longer than [`LIMIT`].
-pub(super) async fn body(mut response: reqwest::Response) -> Result<Vec<u8>, McsdError> {
+/// Reads the answer's body, spending its bytes from `budget` as they arrive.
+pub(super) async fn body(
+    mut response: reqwest::Response,
+    budget: &mut Budget,
+) -> Result<Vec<u8>, McsdError> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(transport)? {
-        if body.len().saturating_add(chunk.len()) > LIMIT {
-            return Err(Malformation::TooLarge { limit: LIMIT }.into());
-        }
+        budget.bytes(chunk.len())?;
         body.extend_from_slice(&chunk);
     }
     Ok(body)
-}
-
-/// The instant an HTTP `Date` header names (RFC 9110 §5.6.7).
-// NOTE: RFC 9110 §6.6.1: a Date that does not parse is treated as absent, which
-// only makes the next refresh a full read, never a narrower one.
-pub(super) fn http_date(value: &str) -> Option<Timestamp> {
-    static PARSER: jiff::fmt::rfc2822::DateTimeParser = jiff::fmt::rfc2822::DateTimeParser::new();
-    PARSER.parse_timestamp(value).ok()
 }
 
 /// The page an answer with `status`, media type `media` and `body` holds.
@@ -77,7 +67,7 @@ pub(super) fn page(
     status: StatusCode,
     media: Option<&str>,
     body: Vec<u8>,
-    date: Option<Timestamp>,
+    date: Option<String>,
 ) -> Result<Page, McsdError> {
     if status != StatusCode::OK {
         return Err(McsdError::Rejected {
@@ -100,6 +90,7 @@ pub(super) fn searchset(
 ) -> Result<Searchset, Malformation> {
     let bundle = bundle(body, "searchset")?;
     let next = next(&bundle.link, base)?;
+    let entries = bundle.entry.len();
     let mut matches = Vec::new();
     for (index, entry) in bundle.entry.into_iter().enumerate() {
         let full_url = full_url(&entry);
@@ -116,7 +107,11 @@ pub(super) fn searchset(
         let full_url = full_url.ok_or(Malformation::NoFullUrl { index })?;
         matches.push(Match { full_url, resource });
     }
-    Ok(Searchset { matches, next })
+    Ok(Searchset {
+        matches,
+        entries,
+        next,
+    })
 }
 
 /// The changes a `history` page of `kind` holds, newest first, and its `next`
@@ -243,7 +238,7 @@ fn next(links: &[BundleLink], base: &Url) -> Result<Option<Url>, Malformation> {
 
 #[cfg(test)]
 mod tests {
-    use super::{deleted, http_date};
+    use super::deleted;
     use crate::mcsd::client::CareService;
 
     #[test]
@@ -268,14 +263,5 @@ mod tests {
         ] {
             assert_eq!(deleted(url, CareService::Endpoint), None, "{url}");
         }
-    }
-
-    #[test]
-    fn an_http_date_reads_as_its_instant_and_garbage_as_none() {
-        assert_eq!(
-            http_date("Sun, 06 Nov 1994 08:49:37 GMT").map(|at| at.to_string()),
-            Some("1994-11-06T08:49:37Z".to_owned())
-        );
-        assert_eq!(http_date("yesterday"), None);
     }
 }

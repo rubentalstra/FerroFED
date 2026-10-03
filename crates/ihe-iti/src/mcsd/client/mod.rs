@@ -18,26 +18,19 @@
 
 mod response;
 
-use std::fmt;
-use std::time::Duration;
-
 use fhir_types::r4::endpoint::Endpoint;
 use fhir_types::r4::organization::Organization;
 use http::header::{ACCEPT, CONTENT_TYPE, DATE};
-use jiff::Timestamp;
+use std::fmt;
 use url::Url;
 
+use super::budget::Budget;
 use super::error::{InvalidBase, McsdError};
 use crate::redact::RedactedUrl;
 use crate::search;
 
 /// The media type ITI-90 and ITI-91 ask for and read (ITI TF-2 Appendix Z.6).
 const FHIR_JSON: &str = "application/fhir+json";
-
-/// The most pages one answer may run to.
-// NOTE: no specification governs this: our own design, a bound on what one
-// answer costs to read, so a directory's link cycle ends in an error.
-const MAX_PAGES: usize = 1000;
 
 /// The care service resource types a federation registry reads from a
 /// directory.
@@ -160,7 +153,7 @@ impl fmt::Debug for Match {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
     matches: Vec<Match>,
-    answered_at: Option<Timestamp>,
+    answered_at: Option<String>,
 }
 
 impl Found {
@@ -177,10 +170,11 @@ impl Found {
     }
 
     /// The `Date` the directory stamped its first page with (RFC 9110
-    /// §6.6.1), on the directory's own clock; `None` when it sent none.
+    /// §6.6.1), as written, on the directory's own clock; `None` when it
+    /// sent none.
     #[must_use]
-    pub fn answered_at(&self) -> Option<Timestamp> {
-        self.answered_at
+    pub fn answered_at(&self) -> Option<&str> {
+        self.answered_at.as_deref()
     }
 }
 
@@ -233,7 +227,7 @@ impl Change {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Updates {
     changes: Vec<Change>,
-    answered_at: Option<Timestamp>,
+    answered_at: Option<String>,
 }
 
 impl Updates {
@@ -250,10 +244,11 @@ impl Updates {
     }
 
     /// The `Date` the directory stamped its first page with (RFC 9110
-    /// §6.6.1), on the directory's own clock; `None` when it sent none.
+    /// §6.6.1), as written, on the directory's own clock; `None` when it
+    /// sent none.
     #[must_use]
-    pub fn answered_at(&self) -> Option<Timestamp> {
-        self.answered_at
+    pub fn answered_at(&self) -> Option<&str> {
+        self.answered_at.as_deref()
     }
 }
 
@@ -328,18 +323,18 @@ impl McsdClient {
     /// `parameters`, each a search parameter name and its value as FHIR search
     /// writes it (ITI-90, §3.90.4.1).
     ///
-    /// `timeout` bounds each page's exchange, from connecting until the page
-    /// is read.
+    /// Every page draws on `budget`: its deadline bounds the whole walk, and
+    /// its pages, bytes and entries are spent as the pages are read.
     ///
     /// # Errors
     /// A [`McsdError`] for a page that is not a `searchset` Bundle of `kind`,
-    /// a page link off the directory's origin, more pages than the client
-    /// reads, and a failure to get a page at all.
+    /// a page link off the directory's origin, a budget that runs out, and a
+    /// failure to get a page at all.
     pub async fn find(
         &self,
         kind: CareService,
         parameters: &[(&str, &str)],
-        timeout: Duration,
+        budget: &mut Budget,
     ) -> Result<Found, McsdError> {
         let mut url = self.interactions(kind).search.clone();
         if !parameters.is_empty() {
@@ -348,14 +343,15 @@ impl McsdClient {
         let mut matches = Vec::new();
         let mut answered_at = None;
         let mut next = Some(url);
-        let mut pages = 0_usize;
+        let mut first = true;
         while let Some(url) = next.take() {
-            let page = self.page(url, timeout, pages).await?;
-            if pages == 0 {
+            let page = self.page(url, budget).await?;
+            if first {
                 answered_at = page.date;
+                first = false;
             }
-            pages = pages.saturating_add(1);
             let read = response::searchset(&page.body, kind, &self.base)?;
+            budget.entries(read.entries)?;
             matches.extend(read.matches);
             next = read.next;
         }
@@ -366,35 +362,35 @@ impl McsdClient {
     }
 
     /// Asks the directory for every version of a resource of type `kind`
-    /// created at or after `since` (ITI-91, §3.91.4.1; FHIR R4 history,
-    /// `_since`).
+    /// created at or after `since`, a FHIR `instant` as written (ITI-91,
+    /// §3.91.4.1; FHIR R4 history, `_since`).
     ///
-    /// `timeout` bounds each page's exchange.
+    /// Every page draws on `budget`, as [`McsdClient::find`]'s do.
     ///
     /// # Errors
     /// A [`McsdError`] for a page that is not a `history` Bundle of `kind`,
-    /// a page link off the directory's origin, more pages than the client
-    /// reads, and a failure to get a page at all.
+    /// a page link off the directory's origin, a budget that runs out, and a
+    /// failure to get a page at all.
     pub async fn updates(
         &self,
         kind: CareService,
-        since: Timestamp,
-        timeout: Duration,
+        since: &str,
+        budget: &mut Budget,
     ) -> Result<Updates, McsdError> {
         let mut url = self.interactions(kind).history.clone();
-        url.query_pairs_mut()
-            .append_pair("_since", &since.to_string());
+        url.query_pairs_mut().append_pair("_since", since);
         let mut changes = Vec::new();
         let mut answered_at = None;
         let mut next = Some(url);
-        let mut pages = 0_usize;
+        let mut first = true;
         while let Some(url) = next.take() {
-            let page = self.page(url, timeout, pages).await?;
-            if pages == 0 {
+            let page = self.page(url, budget).await?;
+            if first {
                 answered_at = page.date;
+                first = false;
             }
-            pages = pages.saturating_add(1);
             let read = response::history(&page.body, kind, &self.base)?;
+            budget.entries(read.changes.len())?;
             changes.extend(read.changes);
             next = read.next;
         }
@@ -404,16 +400,9 @@ impl McsdClient {
         })
     }
 
-    /// Reads one page from `url`, the `pages`-th of its answer.
-    async fn page(
-        &self,
-        url: Url,
-        timeout: Duration,
-        pages: usize,
-    ) -> Result<response::Page, McsdError> {
-        if pages >= MAX_PAGES {
-            return Err(McsdError::TooManyPages { limit: MAX_PAGES });
-        }
+    /// Reads one page from `url`, within what is left of `budget`.
+    async fn page(&self, url: Url, budget: &mut Budget) -> Result<response::Page, McsdError> {
+        budget.page()?;
         // NOTE: no specification governs this: our own design, so a directory's
         // link cannot send this client's credentials to another origin.
         if url.origin() != self.base.origin() {
@@ -423,7 +412,7 @@ impl McsdClient {
             .http
             .get(url)
             .header(ACCEPT, FHIR_JSON)
-            .timeout(timeout)
+            .timeout(budget.remaining()?)
             .send()
             .await
             .map_err(response::transport)?;
@@ -437,8 +426,8 @@ impl McsdClient {
             .headers()
             .get(DATE)
             .and_then(|value| value.to_str().ok())
-            .and_then(response::http_date);
-        let body = response::body(answer).await?;
+            .map(str::to_owned);
+        let body = response::body(answer, budget).await?;
         response::page(status, media.as_deref(), body, date)
     }
 }

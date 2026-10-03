@@ -10,16 +10,20 @@
 )]
 
 use std::error::Error;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrofed_testkit::mcsd::{ENDPOINT_ID, HarnessDirectory, Member, ORGANISATION_ID, Outage};
+use ihe_iti::mcsd::budget::{Budget, Limits};
 use ihe_iti::mcsd::client::McsdClient;
 use ihe_iti::mcsd::replica::{Refresh, Replica, Scope};
 use url::Url;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-const PROMPT: Duration = Duration::from_secs(5);
+/// A budget of `within` and the default caps.
+fn budget(within: Duration) -> Budget {
+    Budget::new(Instant::now() + within, Limits::default())
+}
 
 fn member(name: &str) -> Member {
     Member {
@@ -46,7 +50,12 @@ fn scope() -> Scope {
 async fn what_a_test_publishes_reads_back_through_iti_90() -> TestResult {
     let directory = HarnessDirectory::start().await;
     directory.publish(&[member("a"), member("b")])?;
-    let replica = Replica::read(&client(&directory)?, scope(), PROMPT).await?;
+    let replica = Replica::read(
+        &client(&directory)?,
+        scope(),
+        &mut budget(Duration::from_secs(5)),
+    )
+    .await?;
     let content = replica.directory()?;
     let addresses: Vec<Option<&str>> = content
         .endpoints()
@@ -61,7 +70,10 @@ async fn what_a_test_publishes_reads_back_through_iti_90() -> TestResult {
         addresses
     );
     assert_eq!(2, content.organizations().len());
-    assert!(replica.since().is_some(), "the answers carry the clock");
+    assert!(
+        replica.answered_at().is_some(),
+        "the answers carry the clock"
+    );
     Ok(())
 }
 
@@ -70,12 +82,19 @@ async fn a_change_reads_back_through_iti_91_alone() -> TestResult {
     let directory = HarnessDirectory::start().await;
     directory.publish(&[member("a"), member("b")])?;
     let client = client(&directory)?;
-    let replica = Replica::read(&client, scope(), PROMPT).await?;
+    let replica = Replica::read(&client, scope(), &mut budget(Duration::from_secs(5))).await?;
     let mut moved = member("b");
     moved.address = "https://cdr-b2.example.org/openehr".to_owned();
     directory.put_endpoint(moved.endpoint()?);
 
-    let Refresh::Changed(next) = replica.refreshed(&client, PROMPT).await? else {
+    let Refresh::Changed(next) = replica
+        .refreshed(
+            &client,
+            Some("2026-01-01T04:59:00Z"),
+            &mut budget(Duration::from_secs(5)),
+        )
+        .await?
+    else {
         return Err("the endpoint moved".into());
     };
     let content = next.directory()?;
@@ -111,14 +130,23 @@ async fn an_outage_is_an_error_and_the_end_of_it_answers_again() -> TestResult {
     directory.publish(&[member("a")])?;
     let client = client(&directory)?;
     directory.outage(Some(Outage::Refusing));
-    assert!(Replica::read(&client, scope(), PROMPT).await.is_err());
+    assert!(
+        Replica::read(&client, scope(), &mut budget(Duration::from_secs(5)))
+            .await
+            .is_err()
+    );
     directory.outage(Some(Outage::Silent));
-    let silent = Replica::read(&client, scope(), Duration::from_millis(200)).await;
+    let silent = Replica::read(&client, scope(), &mut budget(Duration::from_millis(200))).await;
     assert!(
         silent.as_ref().is_err_and(|error| !error.answered()),
         "{silent:?}"
     );
     directory.outage(None);
-    assert_eq!((1, 1), Replica::read(&client, scope(), PROMPT).await?.len());
+    assert_eq!(
+        (1, 1),
+        Replica::read(&client, scope(), &mut budget(Duration::from_secs(5)))
+            .await?
+            .len()
+    );
     Ok(())
 }
