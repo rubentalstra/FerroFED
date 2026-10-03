@@ -21,6 +21,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use ferrofed_engine::fanout::Budget;
+use ferrofed_engine::onward::conveyance::Conveyance;
 use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_engine::probe::{Probe, ProbedEhrId};
 use ferrofed_identity::binding::SessionKey;
@@ -107,6 +108,8 @@ pub(crate) struct Scoped<'a> {
     pub(crate) started: Instant,
     /// The gateway's id for the request, the one every member receives.
     pub(crate) outbound: OutboundId,
+    /// Whom the request is on behalf of, conveyed to every member (§13.1, N24).
+    pub(crate) conveyance: &'a Conveyance,
 }
 
 /// The owner an undirected query scoped to one `ehr_id` is routed to, or
@@ -193,6 +196,7 @@ async fn owner<'a>(
                 per_node,
                 overall,
                 request_id: scoped.outbound,
+                conveyance: scoped.conveyance.clone(),
             };
             let (endpoint, _answer) = ehr::ask_all(federation, &probe, &logged)
                 .await

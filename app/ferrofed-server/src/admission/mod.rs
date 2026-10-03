@@ -42,6 +42,7 @@ use openehr_rm::v1_2::ehr::ehr::Ehr;
 use uuid::{Uuid, Variant, Version};
 
 use crate::chain;
+use crate::conveyed::{self, Unconveyed};
 use crate::federation::Federation;
 use report::{Condition, Finding, Report, Verdict};
 use subject::SyntheticSubject;
@@ -60,6 +61,10 @@ pub enum AdmissionError {
     /// the clock.
     #[error("the per-node budget passes the range of the clock")]
     Clock,
+    /// The gateway cannot convey itself to the node, so nothing is sent
+    /// (§13.1, N24).
+    #[error("the check cannot convey the gateway to the node")]
+    Unconveyed(#[source] Unconveyed),
 }
 
 /// One test EHR the node created: the subject it was created for and the
@@ -75,8 +80,9 @@ struct Created {
 /// # Errors
 ///
 /// Returns [`AdmissionError::UnknownEndpoint`] when the registry does not
-/// hold `endpoint`, and [`AdmissionError::Clock`] when no deadline can be
-/// set. Every failure of the node or the cross-reference is a finding.
+/// hold `endpoint`, [`AdmissionError::Clock`] when no deadline can be set,
+/// and [`AdmissionError::Unconveyed`] when the federation holds no signer.
+/// Every failure of the node or the cross-reference is a finding.
 pub async fn check(
     federation: &Federation,
     endpoint: &EndpointId,
@@ -98,8 +104,9 @@ pub async fn check(
     let withheld = Arc::new(Withheld::new(
         subjects.iter().map(|subject| subject.value().clone()),
     ));
+    let conveyance = conveyed::gateway(federation).map_err(AdmissionError::Unconveyed)?;
     let options = |at: Instant| {
-        DispatchOptions::new(at)
+        DispatchOptions::new(at, conveyance.clone())
             .with_withheld(Arc::clone(&withheld))
             .with_request_id(OutboundId::mint())
     };

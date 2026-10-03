@@ -20,6 +20,7 @@ use std::path::Path;
 
 use axum::Router;
 use axum::body::Body;
+use ferrofed_engine::onward::conveyance;
 use ferrofed_testkit::mock::Server;
 use http::{Request, StatusCode, header};
 
@@ -28,7 +29,7 @@ use crate::facade::{
     received, registry, statuses, wire,
 };
 use crate::request_log::logged;
-use crate::support::{call, error_body, request_lines};
+use crate::support::{call, error_body, request_lines, stable_claims};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -99,7 +100,8 @@ async fn registry_members(dir: &Path) -> Result<(Router, Server, Server), Box<dy
 }
 
 /// What a node received, less what differs per gateway by design: the
-/// minted `X-Request-Id` and the `Host` of the mock.
+/// minted `X-Request-Id`, the `Host` of the mock, and the `iat`, `exp` and
+/// `jti` minted for each `openEHR-federation-client` token.
 async fn capture(server: &Server) -> Result<Vec<String>, Box<dyn Error>> {
     let requests = server.received_requests().await.ok_or("recording is on")?;
     let mut captured = Vec::new();
@@ -108,8 +110,16 @@ async fn capture(server: &Server) -> Result<Vec<String>, Box<dyn Error>> {
             .headers
             .iter()
             .filter(|(name, _)| !matches!(name.as_str(), "x-request-id" | "host"))
-            .map(|(name, value)| format!("{name}: {}", String::from_utf8_lossy(value.as_bytes())))
-            .collect();
+            .map(|(name, value)| -> Result<String, Box<dyn Error>> {
+                if name.as_str().eq_ignore_ascii_case(conveyance::HEADER) {
+                    return Ok(format!("{name}: {}", stable_claims(value.to_str()?)?));
+                }
+                Ok(format!(
+                    "{name}: {}",
+                    String::from_utf8_lossy(value.as_bytes())
+                ))
+            })
+            .collect::<Result<_, _>>()?;
         headers.sort();
         captured.push(format!(
             "{} {} {:?}\n{}\n{}",

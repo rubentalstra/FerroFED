@@ -239,7 +239,8 @@ fn federation(
     let document = dir.join("registry.toml");
     std::fs::write(&document, registry)?;
     let text = configuration(&document, top, tables);
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     Ok(Federation::load(&settings)?.ok_or("a registry is configured")?)
 }
 

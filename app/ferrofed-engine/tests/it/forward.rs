@@ -56,9 +56,11 @@ fn options_under(
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline)
-        .with_request_id(outbound)
-        .with_withheld(Arc::new(withheld)))
+    Ok(
+        DispatchOptions::new(deadline, crate::conveyed::conveyance())
+            .with_request_id(outbound)
+            .with_withheld(Arc::new(withheld)),
+    )
 }
 
 fn options(withheld: Withheld) -> Result<DispatchOptions, Box<dyn Error>> {
@@ -527,7 +529,7 @@ async fn a_401_is_the_node_refusing_the_onward_credentials() -> TestResult {
 async fn a_forward_whose_deadline_passed_before_it_left_is_expired_and_never_sent() -> TestResult {
     let at = format!("/ehr/{EHR}");
     let server = node("GET", &format!("/v1{at}"), ResponseTemplate::new(200)).await;
-    let passed = DispatchOptions::new(Instant::now());
+    let passed = DispatchOptions::new(Instant::now(), crate::conveyed::conveyance());
     let forwarded = client(&server.uri())?
         .forward(request(Method::GET, &at, HeaderMap::new(), b""), &passed)
         .await;
@@ -555,7 +557,7 @@ async fn a_forward_the_node_leaves_unanswered_is_a_time_out_of_a_silent_node() -
     let forwarded = client(&server.uri())?
         .forward(
             request(Method::GET, &at, HeaderMap::new(), b""),
-            &DispatchOptions::new(deadline),
+            &DispatchOptions::new(deadline, crate::conveyed::conveyance()),
         )
         .await;
     assert!(

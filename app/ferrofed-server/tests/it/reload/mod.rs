@@ -134,9 +134,9 @@ impl Gateway {
 /// its first table header extend `[federation]`.
 fn configuration(document: &Path, top: &str, tables: &str) -> String {
     let document = toml::Value::String(document.display().to_string());
-    format!(
+    crate::support::signed(&format!(
         "profile = \"development\"\n{top}\n\n[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = 5000\noverall_timeout_ms = 6000\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{tables}"
-    )
+    ))
 }
 
 fn ids<T: std::str::FromStr>(values: &[&str]) -> Result<Vec<T>, T::Err> {

@@ -105,7 +105,8 @@ fn gateway(
     let document = dir.join("registry.toml");
     std::fs::write(&document, registry(url))?;
     let text = settings_text(&document, federation, tables);
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
     Ok(ferrofed_server::router(
         Arc::new(AppState::with_federation(federation)),
@@ -365,9 +366,14 @@ async fn the_definition_area_declares_nothing_offered() -> TestResult {
         "§12.7 registry-not-offered: every definition request routes, the versioned PUT included: {}",
         body.federation.its_rest.definition
     );
-    assert!(
-        body.federation.auth.is_none(),
-        "§13.1: no JWKS is configured, so no auth"
+    assert_eq!(
+        Some(crate::support::JWKS_URI),
+        body.federation
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.jwks_uri.as_ref())
+            .map(openehr_federation::object::Uri::as_str),
+        "§13.1, N30: every federating gateway signs, so it declares its JWKS"
     );
     Ok(())
 }
@@ -520,14 +526,15 @@ fn a_registry_without_a_federation_id_refuses_to_boot() -> TestResult {
     let document = dir.path().join("registry.toml");
     std::fs::write(&document, registry("http://127.0.0.1:9"))?;
     let text = settings_text(&document, "", "").replace(&format!("id = \"{ID}\"\n"), "");
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let refused = Federation::load(&settings).err().ok_or("refused")?;
     assert!(
         matches!(refused, FederationError::IdUndeclared),
         "{refused:?}"
     );
     let empty = settings_text(&document, "", "").replace(&format!("\"{ID}\""), "\"\"");
-    let error = Config::from_sources(Some(&empty), &BTreeMap::new())?
+    let error = Config::from_sources(Some(&crate::support::signed(&empty)), &BTreeMap::new())?
         .resolve()
         .err()
         .ok_or("an empty id is refused")?;

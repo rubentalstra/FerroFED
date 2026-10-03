@@ -106,8 +106,10 @@ v0.0.8, security and the bindings (§13 to §15, Annex A, Annex B):
   use, and an edge mode
   ([#80](https://github.com/FerroHEALTH/FerroFED/issues/80),
   [Client authentication](../operate/authentication.md)); the client's
-  identity conveyed on every request to a node
-  ([#82](https://github.com/FerroHEALTH/FerroFED/issues/82));
+  identity conveyed on every request to a node, built: a token the gateway
+  signs for each node, verifiable against its published JWKS
+  ([#82](https://github.com/FerroHEALTH/FerroFED/issues/82),
+  [What a node is told about the caller](../operate/authentication.md#what-a-node-is-told-about-the-caller));
 - OAuth 2.0 client credentials with an RFC 7523 signed JWT assertion to each
   node, and the gateway's JWKS published
   ([#81](https://github.com/FerroHEALTH/FerroFED/issues/81));

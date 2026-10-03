@@ -413,3 +413,146 @@ pub(crate) fn without_minted<'a>(
     }
     Ok(masked)
 }
+
+/// The address every test gateway declares its JWK Set at.
+pub(crate) const JWKS_URI: &str = "https://gw.example.org/.well-known/jwks.json";
+
+/// The gateway signing key every test gateway that federates is configured
+/// with: a synthetic ES384 key written once per test process, in a directory
+/// that lives as long as the process.
+#[expect(
+    clippy::expect_used,
+    reason = "a test process that cannot write a synthetic key cannot test anything"
+)]
+static SIGNING_KEY: LazyLock<(tempfile::TempDir, String)> = LazyLock::new(|| {
+    let dir = tempfile::tempdir().expect("a temporary directory should be made");
+    let file = dir.path().join("signing-key.pem");
+    let pem = ferrofed_testkit::oauth::es384_pem().expect("a test key should generate");
+    std::fs::write(&file, pem).expect("the key file should be written");
+    (dir, file.display().to_string())
+});
+
+/// The `[signing]` table every test gateway that federates carries, so it
+/// can sign the caller's identity for each node (§13.1, N24).
+pub(crate) fn signing_toml() -> String {
+    format!(
+        "\n[signing]\nkey_file = {}\njwks_uri = \"{JWKS_URI}\"\n",
+        toml::Value::String(SIGNING_KEY.1.clone())
+    )
+}
+
+/// The file the suite's gateway signing key is written to.
+pub(crate) fn signing_key_file() -> &'static str {
+    &SIGNING_KEY.1
+}
+
+/// `text` with the [`signing_toml`] table appended when it configures a
+/// registry and no `[signing]` of its own.
+pub(crate) fn signed(text: &str) -> String {
+    if text.contains("[registry]") && !text.contains("[signing]") {
+        format!("{text}{}", signing_toml())
+    } else {
+        text.to_owned()
+    }
+}
+
+/// A signer over a fresh synthetic key, naming the gateway `federation`,
+/// for a test that assembles its own federation.
+pub(crate) fn signer(
+    federation: &str,
+) -> Result<Arc<ferrofed_engine::onward::conveyance::Signer>, Box<dyn StdError>> {
+    use ferrofed_engine::onward::SystemClock;
+    use ferrofed_engine::onward::keys::{KeyRing, SigningKey};
+    let pem = secrecy::SecretString::from(ferrofed_testkit::oauth::es384_pem()?);
+    let keys = KeyRing::new(
+        SigningKey::from_pem(&pem)?,
+        None,
+        Duration::ZERO,
+        Arc::new(SystemClock),
+    )?;
+    Ok(Arc::new(ferrofed_engine::onward::conveyance::Signer::new(
+        Arc::new(keys),
+        federation,
+    )))
+}
+
+/// A conveyance of a synthetic verified caller, for a test that dispatches
+/// through the engine itself.
+pub(crate) fn conveyance()
+-> Result<ferrofed_engine::onward::conveyance::Conveyance, Box<dyn StdError>> {
+    use ferrofed_engine::onward::conveyance::{Caller, Conveyance, Principal, Verification};
+    let caller = Caller {
+        issuer: ISSUER.to_owned(),
+        subject: "clinician-0042".to_owned(),
+        organisation: None,
+        purposes: Vec::new(),
+        scope: String::new(),
+        verified_by: Verification::Signature,
+    };
+    Ok(Conveyance::new(
+        signer("example-federation")?,
+        Principal::Caller(caller),
+    ))
+}
+
+/// One purpose of use of a conveyed token, as a node reads it.
+#[derive(Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConveyedPurpose {
+    /// The code system.
+    pub(crate) system: Option<String>,
+    /// The code.
+    pub(crate) code: String,
+}
+
+/// The claims of an `openEHR-federation-client` token as a node reads them;
+/// a claim not named here, `person_id` among them, fails the read (§5.4.1,
+/// N33).
+#[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Conveyed {
+    pub(crate) iss: String,
+    pub(crate) aud: String,
+    pub(crate) iat: i64,
+    pub(crate) exp: i64,
+    pub(crate) jti: String,
+    pub(crate) sub: String,
+    pub(crate) iss_upstream: Option<String>,
+    pub(crate) verified_by: Option<String>,
+    pub(crate) subject_organization_id: Option<String>,
+    #[serde(default)]
+    pub(crate) purpose_of_use: Vec<ConveyedPurpose>,
+    pub(crate) scope: Option<String>,
+}
+
+/// The claims `token` carries, read without verifying it.
+pub(crate) fn conveyed_claims(token: &str) -> Result<Conveyed, Box<dyn StdError>> {
+    Ok(jsonwebtoken::dangerous::insecure_decode_claims::<Conveyed>(
+        token,
+    )?)
+}
+
+/// What a search reads in place of a conveyed token's `aud`.
+pub(crate) const CONVEYED_AUDIENCE: &str = "<audience>";
+
+/// The claims of `token` as JSON, for a search of what a node received, its
+/// `aud` read as [`CONVEYED_AUDIENCE`].
+///
+/// The `aud` is the endpoint id the registry gives the node it is sent to,
+/// composed from no request, as the minted request id is; every other claim
+/// stays as the node reads it, so a client value in one is still found.
+pub(crate) fn searched_claims(token: &str) -> Result<String, Box<dyn StdError>> {
+    let mut claims = conveyed_claims(token)?;
+    CONVEYED_AUDIENCE.clone_into(&mut claims.aud);
+    Ok(serde_json::to_string(&claims)?)
+}
+
+/// The claims of `token` as JSON with the values minted per token, `iat`,
+/// `exp` and `jti`, cleared, so two requests the gateway sent for the same
+/// caller compare equal.
+pub(crate) fn stable_claims(token: &str) -> Result<String, Box<dyn StdError>> {
+    let mut claims = conveyed_claims(token)?;
+    (claims.iat, claims.exp) = (0, 0);
+    claims.jti.clear();
+    Ok(serde_json::to_string(&claims)?)
+}

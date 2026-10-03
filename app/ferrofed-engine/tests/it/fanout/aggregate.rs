@@ -146,7 +146,7 @@ async fn a_recombining_plan_is_refused_best_effort_before_dispatch() -> TestResu
         &snapshot,
         plan,
         budget(2_000, 5_000)?,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await;
     assert!(
@@ -169,7 +169,7 @@ async fn a_count_past_what_a_json_number_holds_is_an_error() -> TestResult {
         &snapshot,
         plan(&["node-a-pub", "node-b-pub"])?,
         budget(2_000, 5_000)?,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await;
     assert!(

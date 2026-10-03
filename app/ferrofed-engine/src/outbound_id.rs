@@ -21,6 +21,7 @@
 //! | `Content-Type` | `application/json` | `openehr-its`'s client runtime, for the JSON body |
 //! | `Authorization` | `Basic` or `Bearer` | the endpoint's onward credential from the gateway's configuration, or the access token its OAuth 2.0 grant obtained ([`crate::onward`]), only when one is configured |
 //! | `X-Request-Id` | a version 4 UUID | [`OutboundId::mint`], only when the caller passes one |
+//! | `openEHR-federation-client` | a compact JWS | the caller's verified identity, or the gateway's own for its operator, signed for the node with the gateway's key ([`crate::onward::conveyance`]) |
 //! | `Host`, `Content-Length` | the endpoint's authority, the body length | the HTTP engine, from the registry URL and the composed body |
 //! | `Accept-Encoding` | the codings the engine decodes | the HTTP engine, from its compression features |
 //!
@@ -36,6 +37,7 @@
 //! | `Accept` | `application/json` | `openehr-its`'s client runtime, when the operation declares no `Accept` |
 //! | `Authorization` | `Basic` or `Bearer` | the endpoint's onward credential, as above; the client's own is never forwarded |
 //! | `X-Request-Id` | a version 4 UUID | [`OutboundId::mint`], one per client request; the client's own is never forwarded |
+//! | `openEHR-federation-client` | a compact JWS | the caller's identity signed for the node, as above; the client's own is never forwarded |
 //! | `Host`, `Content-Length` | the endpoint's authority, the body length | the HTTP engine, from the registry URL and the client's body |
 //! | `Accept-Encoding` | the codings the engine decodes | the HTTP engine, from its compression features |
 //!
@@ -140,9 +142,10 @@ mod tests {
         let deadline = Instant::now()
             .checked_add(Duration::from_secs(5))
             .ok_or("the deadline is past the platform clock")?;
-        let options = DispatchOptions::new(deadline)
-            .with_withheld(Arc::new(Withheld::new([SecretString::from(IN_FIXED_ID)])))
-            .with_request_id(OutboundId::fixed(uuid::Uuid::parse_str(FIXED_ID)?));
+        let options =
+            DispatchOptions::new(deadline, crate::onward::conveyance::tests::conveyance())
+                .with_withheld(Arc::new(Withheld::new([SecretString::from(IN_FIXED_ID)])))
+                .with_request_id(OutboundId::fixed(uuid::Uuid::parse_str(FIXED_ID)?));
         let reply = client.query(&NodeQuery::new(aql), &options).await;
         let requests = server.received_requests().await.ok_or("recording is on")?;
         let ids = requests

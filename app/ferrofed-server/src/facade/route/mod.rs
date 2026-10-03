@@ -50,13 +50,17 @@
 //! `GET {base}/v1/ehr` names its EHR by subject, which the gateway resolves
 //! and routes by the resolved `ehr_id` ([`subject`]; §5.2, N33).
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use axum::Extension;
 use axum::body::{Body, Bytes};
+use axum::extract::State;
 use axum::response::Response;
 use ferrofed_engine::declared::Refusal;
 use ferrofed_engine::dispatch::{Contact, DispatchOptions, REQUEST_ID_HEADER};
 use ferrofed_engine::forward::{ClientRequest, ForwardError, Forwarded, HeldRequest};
+use ferrofed_engine::onward::conveyance::Conveyance;
 use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_registry::id::EhrId;
 use ferrofed_registry::snapshot::Endpoint;
@@ -65,12 +69,17 @@ use openehr_base::prelude::ObjectVersionId;
 use openehr_federation::outcome::ErrorDetail;
 use openehr_its::rest::routes::{self, Lookup, RouteMatch};
 
+use crate::ITS_REST_PREFIX;
+use crate::auth::caller::Caller;
+use crate::conveyed;
 use crate::error::{self, Code};
 use crate::facade::provenance::Provenance;
 use crate::facade::route::chosen::{Chooser, named};
 use crate::facade::write;
 use crate::facade::{follow_up, owner, security, subject};
 use crate::federation::Federation;
+use crate::request_id;
+use crate::state::AppState;
 
 mod chosen;
 pub(crate) mod ehr;
@@ -111,6 +120,74 @@ pub struct Arrived<'a> {
     /// The gateway's id for the request, the `X-Request-Id` the node receives
     /// (§5.4.1, N33).
     pub outbound: OutboundId,
+    /// Whom the request is on behalf of, conveyed to every node it reaches
+    /// (§13.1, N24).
+    pub conveyance: Conveyance,
+}
+
+/// Every path no route serves.
+///
+/// A path under [`ITS_REST_PREFIX`] is part of the ITS-REST surface: a
+/// request to an EHR resource under a path `ehr_id`, the creation of an
+/// EHR, a definition request the stored-query registry does not hold, and a
+/// DEMOGRAPHIC request naming the endpoint the deployment declared for it, is
+/// routed to one node ([`serve`]; §7a.1, §12.4, §12.6), `OPTIONS`
+/// names the methods the gateway serves for the path
+/// ([`crate::facade::options::allow`]; §7a.2), and every other path answers `501`
+/// (§7a.1, N32), because a `404` would claim the resource does not exist.
+/// Every other path answers `404`. No answer of the gateway's own echoes the path.
+///
+/// A routed request reaches its node under the request's [`OutboundId`],
+/// never the client's `x-request-id` (§5.4.1, N33), conveying the verified
+/// [`Caller`] (§13.1, N24).
+pub(crate) async fn unrouted(
+    State(state): State<Arc<AppState>>,
+    outbound: Option<Extension<OutboundId>>,
+    caller: Option<Extension<Caller>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request_id = request_id::of(&headers).unwrap_or_default();
+    let outbound = outbound.map_or_else(OutboundId::mint, |Extension(id)| id);
+    let Some(path) = uri
+        .path()
+        .strip_prefix(ITS_REST_PREFIX.trim_end_matches('/'))
+        .filter(|path| path.starts_with('/'))
+    else {
+        return error::fixed(Code::NotFound, request_id);
+    };
+    if method == Method::OPTIONS {
+        return crate::facade::options::allow(&state, path, request_id);
+    }
+    let federation = state.federation();
+    let Some(serving) = federation.as_deref() else {
+        return error::fixed(Code::NotImplemented, request_id);
+    };
+    let conveyance = match conveyed::of(serving, caller.as_deref()) {
+        Ok(conveyance) => conveyance,
+        Err(unconveyed) => return unconveyed.respond(request_id, &outbound.to_string()),
+    };
+    let mut arrived = Arrived {
+        method: &method,
+        path,
+        uri: &uri,
+        headers: &headers,
+        body,
+        request_id,
+        outbound,
+        conveyance,
+    };
+    if let Some(definitions) = state.definitions()
+        && let Lookup::Matched(matched) = routes::lookup(&method, path)
+    {
+        match crate::facade::stored::serve(serving, definitions, &matched, arrived).await {
+            Ok(response) => return response,
+            Err(unanswered) => arrived = unanswered,
+        }
+    }
+    serve(Some(serving), arrived).await
 }
 
 /// Answers a request under the ITS-REST prefix that no other route serves.
@@ -315,15 +392,16 @@ pub(crate) enum Failure {
 }
 
 /// Forwards the held `request` to `endpoint` once, within `budget`, under
-/// the gateway's `outbound` id for it.
+/// the gateway's `outbound` id for it, conveying `conveyance`.
 async fn forward(
     federation: &Federation,
     endpoint: &Endpoint,
-    (request, outbound): (HeldRequest, OutboundId),
+    (request, outbound, conveyance): (HeldRequest, OutboundId, &Conveyance),
     budget: &Deadlines,
     logged: &str,
 ) -> Result<Forwarded, Failure> {
-    let options = DispatchOptions::new(budget.per_node()).with_request_id(outbound);
+    let options =
+        DispatchOptions::new(budget.per_node(), conveyance.clone()).with_request_id(outbound);
     send(federation, endpoint, request, &options, logged).await
 }
 

@@ -59,7 +59,10 @@ fn options() -> Result<DispatchOptions, Box<dyn Error>> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline).with_withheld(Arc::new(withheld())))
+    Ok(
+        DispatchOptions::new(deadline, crate::conveyed::conveyance())
+            .with_withheld(Arc::new(withheld())),
+    )
 }
 
 async fn node() -> Server {
@@ -176,8 +179,10 @@ fn short_options() -> Result<DispatchOptions, Box<dyn Error>> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline)
-        .with_withheld(Arc::new(Withheld::new([SecretString::from(SHORT)]))))
+    Ok(
+        DispatchOptions::new(deadline, crate::conveyed::conveyance())
+            .with_withheld(Arc::new(Withheld::new([SecretString::from(SHORT)]))),
+    )
 }
 
 // conformance: CP-26
@@ -234,7 +239,7 @@ async fn a_withheld_value_inside_the_minted_id_is_sent_with_that_id() -> TestRes
         .checked_add(Duration::from_secs(5))
         .ok_or("the deadline is past the platform clock")?;
     let withheld = Withheld::new([SecretString::from(IN_EVERY_MINTED_ID)]);
-    let options = DispatchOptions::new(deadline)
+    let options = DispatchOptions::new(deadline, crate::conveyed::conveyance())
         .with_withheld(Arc::new(withheld))
         .with_request_id(id);
     let scoped = NodeQuery::new(CLEAN).with_scope(&HierObjectId::new(SCOPE)?);
@@ -262,8 +267,10 @@ fn withholding(value: &str) -> Result<DispatchOptions, Box<dyn Error>> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or("the deadline is past the platform clock")?;
-    Ok(DispatchOptions::new(deadline)
-        .with_withheld(Arc::new(Withheld::new([SecretString::from(value)]))))
+    Ok(
+        DispatchOptions::new(deadline, crate::conveyed::conveyance())
+            .with_withheld(Arc::new(Withheld::new([SecretString::from(value)]))),
+    )
 }
 
 // conformance: CP-26
@@ -360,7 +367,7 @@ async fn a_fan_out_with_a_leaking_query_fails_closed_and_asks_nobody() -> TestRe
         &snapshot,
         plan,
         Budget::new(Duration::from_secs(2), Duration::from_secs(3))?,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await;
     assert!(

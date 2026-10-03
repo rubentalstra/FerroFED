@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Vernum Projecten B.V.
+# SPDX-License-Identifier: BUSL-1.1
+#
+# The quickstart gateway's signing key, written by
+# scripts/quickstart/signing-key.sh before the first `docker compose up`:
+# a development key, never committed.
+*
+!.gitignore

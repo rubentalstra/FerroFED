@@ -104,7 +104,8 @@ fn gateway(
     let text = format!(
         "profile = \"development\"\n\n[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = {per_node_ms}\noverall_timeout_ms = {overall_ms}\nnode_selection = \"ask-all\"\nid = \"example-federation\"\nbest_effort = true\n\n{rows}"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
     Ok(ferrofed_server::router(
         Arc::new(AppState::with_federation(federation)),
@@ -492,7 +493,8 @@ fn configured(
     let text = format!(
         "profile = \"development\"\n\n[server]\n{server}\n\n[registry]\ndocument = {document}\n\n[federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n{federation}\n\n{rows}"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
     let mut server = settings.server.clone();
     server.auth = crate::support::auth();

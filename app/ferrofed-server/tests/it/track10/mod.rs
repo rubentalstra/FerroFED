@@ -136,7 +136,9 @@ impl Topology<'_> {
                 "\n[[dev.crossref]]\nnamespace = \"{namespace}\"\nvalue = \"{value}\"\nmember = \"{member}\"\nehr_id = \"{ehr_id}\"\n"
             )?;
         }
-        let resolved = Config::from_sources(Some(&config), &BTreeMap::new())?.resolve()?;
+        let resolved =
+            Config::from_sources(Some(&crate::support::signed(&config)), &BTreeMap::new())?
+                .resolve()?;
         let federation = Federation::load(&resolved)?.ok_or("a registry is configured")?;
         let mut server = settings();
         server.request_timeout = Duration::from_secs(30);

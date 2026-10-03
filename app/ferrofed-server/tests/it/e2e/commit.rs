@@ -9,13 +9,14 @@
 //! (§10.3, §12.4, §12a.1, N23).
 
 use axum::body::Body;
+use ferrofed_engine::onward::conveyance;
 use ferrofed_testkit::containers::{self, API_PATH};
 use ferrofed_testkit::proxy::Capture;
 use ferrofed_testkit::seed::{self, EhrSeed, SeedPlan};
 use http::{Request, StatusCode, header};
 
 use crate::e2e::{EHR_A, PATIENT, TestResult, composition_carrying, gateway};
-use crate::support::CLIENT_TOKEN;
+use crate::support::{CLIENT_TOKEN, searched_claims};
 
 /// A request of `verb` to `uri` naming node A in the endpoint header.
 fn routed_to_a(verb: http::Method, uri: &str, body: Body) -> Result<Request<Body>, http::Error> {
@@ -35,6 +36,10 @@ fn field<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
 
 /// Whether `capture` carries `needle` outside its body: in the path, the
 /// query or a header.
+///
+/// The gateway's own `openEHR-federation-client` token is searched as the
+/// claims a node decodes from it ([`searched_claims`]); a token that does
+/// not decode counts as carrying the needle.
 fn outside_the_body(capture: &Capture, needle: &[u8]) -> bool {
     let found = |haystack: &[u8]| haystack.windows(needle.len()).any(|w| w == needle);
     found(capture.path.as_bytes())
@@ -42,10 +47,15 @@ fn outside_the_body(capture: &Capture, needle: &[u8]) -> bool {
             .query
             .as_deref()
             .is_some_and(|query| found(query.as_bytes()))
-        || capture
-            .headers
-            .iter()
-            .any(|(name, value)| found(name.as_bytes()) || found(value))
+        || capture.headers.iter().any(|(name, value)| {
+            if name.eq_ignore_ascii_case(conveyance::HEADER) {
+                return std::str::from_utf8(value)
+                    .ok()
+                    .and_then(|token| searched_claims(token).ok())
+                    .is_none_or(|claims| found(claims.as_bytes()));
+            }
+            found(name.as_bytes()) || found(value)
+        })
 }
 
 /// Asserts that node A's journal holds the one commit, byte-identical to

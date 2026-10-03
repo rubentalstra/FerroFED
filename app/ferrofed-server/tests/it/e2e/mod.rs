@@ -203,7 +203,8 @@ managing_organisation = "org-b"
     let config = format!(
         "{resolver}\n\n[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = 20000\noverall_timeout_ms = 25000\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n"
     );
-    let settings_ = Config::from_sources(Some(&config), &BTreeMap::new())?.resolve()?;
+    let settings_ = Config::from_sources(Some(&crate::support::signed(&config)), &BTreeMap::new())?
+        .resolve()?;
     Ok(Federation::load(&settings_)?.ok_or("a registry is configured")?)
 }
 

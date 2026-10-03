@@ -49,7 +49,8 @@ async fn a_check_the_budget_overtook_names_a_call_never_sent_and_records_nothing
         None,
         Context::new(Targeting::AskAll),
         Budget::new(Duration::from_nanos(1), Duration::from_nanos(1))?,
-    );
+    )
+    .with_signer(crate::support::signer("example-federation")?);
     let state = Arc::new(AppState::with_federation(federation));
     let federation = state.federation().ok_or("the state holds the federation")?;
     let report =

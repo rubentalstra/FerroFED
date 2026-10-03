@@ -5,6 +5,7 @@
 # instances with their own system_ids, on one PostgreSQL server that holds a
 # database per node (docs/architecture.md section 13).
 #
+#   scripts/quickstart/signing-key.sh
 #   docker compose up --wait
 #   scripts/quickstart/seed.sh
 #   curl http://127.0.0.1:8080/health
@@ -22,6 +23,12 @@
 # with a static cross-reference from four synthetic patients to their EHRs,
 # which scripts/quickstart/seed.sh creates over ITS-REST: a patient at all
 # four nodes, one at two, one at one and one at none.
+#
+# THE SIGNING KEY. The gateway signs the caller's identity onto every request
+# to a node with its own key, which scripts/quickstart/signing-key.sh writes
+# into docker/quickstart/signing/ once, before the first `docker compose up`:
+# a development key, NOT for anything real. Without it the gateway refuses to
+# start.
 #
 # THE NODES. Each runs FerroEHR's documented image and stamps its own system_id
 # into every EHR and version it creates. All four use FerroEHR's quickstart
@@ -113,6 +120,9 @@ services:
       # The quickstart issuer's key set, which scripts/quickstart/token.sh
       # writes on its first run (docker/quickstart/ferrofed.toml, [auth]).
       - ./docker/quickstart/issuer:/etc/ferrofed/issuer:ro
+      # The gateway's signing key, which scripts/quickstart/signing-key.sh
+      # writes before the first `docker compose up` ([signing]).
+      - ./docker/quickstart/signing:/etc/ferrofed/signing:ro
     # The gateway writes nothing: no cache, no scratch file, and every secret is
     # read once at boot. So the root filesystem is read-only with no tmpfs
     # beside it.

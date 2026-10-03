@@ -59,7 +59,7 @@ async fn time_spent_before_the_dispatch_comes_out_of_the_overall_budget() -> Tes
         plan_for(&["node-s-pub"])?,
         budget(10_000, overall_ms)?,
         arrived,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await?;
     let waited = called.elapsed();
@@ -92,7 +92,7 @@ async fn a_shortened_budget_abandons_a_node_the_configured_one_would_wait_for() 
         plan_for(&["node-l-pub"])?,
         configured.shortened_to(Duration::from_millis(wait_ms)),
         started,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await?;
     let waited = started.elapsed();
@@ -127,7 +127,7 @@ async fn a_longer_wait_leaves_the_configured_budget_in_force() -> TestResult {
         plan_for(&["node-l-pub"])?,
         budget(300, overall_ms)?.shortened_to(Duration::from_secs(60)),
         started,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await?;
     let waited = started.elapsed();
@@ -156,7 +156,7 @@ async fn a_zero_wait_asks_no_node_and_reports_every_node_time_out() -> TestResul
         plan_for(&["node-a-pub", "node-b-pub"])?,
         budget(2_000, 5_000)?.shortened_to(Duration::ZERO),
         started,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await?;
     assert_eq!(answer.status(), StatusCode::GATEWAY_TIMEOUT);
@@ -199,7 +199,7 @@ async fn abandoning_one_node_never_aborts_another_in_flight() -> TestResult {
         plan_for(&["node-e-pub", "node-m-pub", "node-s-pub"])?.completing(Completion::BestEffort),
         budget(per_node_ms, per_node_ms + 2 * SLACK_MS)?,
         started,
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await?;
     let waited = started.elapsed();
@@ -234,7 +234,7 @@ async fn a_zero_wait_leaves_every_node_without_contact() -> TestResult {
         plan_for(&["node-a-pub", "node-b-pub"])?,
         budget(2_000, 5_000)?.shortened_to(Duration::ZERO),
         Instant::now(),
-        None,
+        (&crate::conveyed::conveyance(), None),
     )
     .await?;
     let contacts: BTreeMap<String, Contact> = answer

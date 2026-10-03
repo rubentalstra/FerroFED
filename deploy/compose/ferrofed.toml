@@ -113,7 +113,7 @@ password_file = "/run/secrets/ferrofed/node-b-password"
 # Or OAuth 2.0 client credentials with a signed JWT client assertion, the
 # default onward mechanism of the Federation Tier (§13.1): the gateway
 # obtains a token at the node's token endpoint and sends that. Use it in
-# place of the section above for that endpoint, and set [signing] below.
+# place of the section above for that endpoint.
 # https://ferrofed.eu/docs/operate/configuration.html#oauth-20-to-a-node
 # [credentials."node-b-query".oauth2]
 # grant = "client_credentials"
@@ -122,12 +122,15 @@ password_file = "/run/secrets/ferrofed/node-b-password"
 # client_id = "ferrofed-gateway"
 # scope = "system/aql-*.s"
 
-# The gateway's ES384 signing key, in PKCS#8 PEM, which signs every client
-# assertion; the gateway publishes its public key at
+# The gateway's ES384 signing key, in PKCS#8 PEM, required: it signs the
+# caller's identity onto every request to a node, in the
+# openEHR-federation-client token (§13.1, N24), and every client assertion of
+# an OAuth 2.0 grant. The gateway publishes its public key at
 # /.well-known/jwks.json and declares jwks_uri in OPTIONS /. Make one with:
 #   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 \
 #     -out secrets/signing-key.pem
-# [signing]
-# key_file = "/run/secrets/ferrofed/signing-key.pem"
-# # EDIT: the address the nodes fetch the JWK Set from.
-# jwks_uri = "https://gateway.example.org/.well-known/jwks.json"
+# https://ferrofed.eu/docs/operate/authentication.html#what-a-node-is-told-about-the-caller
+[signing]
+key_file = "/run/secrets/ferrofed/signing-key.pem"
+# EDIT: the address the nodes fetch the JWK Set from.
+jwks_uri = "https://gateway.example.org/.well-known/jwks.json"

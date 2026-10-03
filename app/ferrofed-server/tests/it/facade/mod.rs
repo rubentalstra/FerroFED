@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
+use ferrofed_engine::onward::conveyance;
 use ferrofed_server::config::Config;
 use ferrofed_server::federation::Federation;
 use ferrofed_server::state::AppState;
@@ -33,7 +34,7 @@ use serde::Deserialize;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use crate::support::{MINTED_REQUEST_ID, is_minted_form, settings};
+use crate::support::{MINTED_REQUEST_ID, is_minted_form, searched_claims, settings};
 
 /// The synthetic patient identifier: visibly synthetic, under no real scheme.
 pub(crate) const PATIENT: &str = "SENTINEL-PATIENT-38kq";
@@ -180,7 +181,8 @@ pub(crate) fn gateway_within(
     let text = format!(
         "{top}\n\n[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = {per_node_ms}\noverall_timeout_ms = {overall_ms}\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{tables}"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
     Ok(ferrofed_server::router(
         Arc::new(AppState::with_federation(federation)),
@@ -263,19 +265,32 @@ impl std::fmt::Display for Wire {
     }
 }
 
+/// What a search reads in place of the name of the gateway's own
+/// `openEHR-federation-client` header, before the claims its token carries.
+pub(crate) const CONVEYED: &str = "<conveyed-claims>";
+
 /// Every byte `server` received: the request target, each header name and
 /// raw value, and the raw body.
 ///
-/// The one exception is an `x-request-id` in the form the gateway mints,
-/// recorded as [`MINTED_REQUEST_ID`]: a random UUID can hold a short
-/// synthetic identifier by chance. Every other value stays raw, so a client
-/// value reaching a node is still searched.
+/// Two values are recorded otherwise. An `x-request-id` in the form the
+/// gateway mints is recorded as [`MINTED_REQUEST_ID`]: a random UUID can
+/// hold a short synthetic identifier by chance. The gateway's
+/// `openEHR-federation-client` token is recorded as [`CONVEYED`] and the
+/// claims a node decodes from it, so a search reads every claim value and
+/// the name never reads as a federation request header a client sent. Every
+/// other value stays raw, so a client value reaching a node is still
+/// searched.
 pub(crate) async fn wire(server: &Server) -> Result<Wire, Box<dyn Error>> {
     let requests = server.received_requests().await.ok_or("recording is on")?;
     let mut bytes = Vec::new();
     for request in requests {
         bytes.extend_from_slice(request.url.as_str().as_bytes());
         for (name, value) in &request.headers {
+            if name.as_str().eq_ignore_ascii_case(conveyance::HEADER) {
+                bytes.extend_from_slice(CONVEYED.as_bytes());
+                bytes.extend_from_slice(searched_claims(value.to_str()?)?.as_bytes());
+                continue;
+            }
             bytes.extend_from_slice(name.as_str().as_bytes());
             if minted(name, value) {
                 bytes.extend_from_slice(MINTED_REQUEST_ID.as_bytes());

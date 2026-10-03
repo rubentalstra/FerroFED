@@ -312,7 +312,8 @@ fn the_banner_and_the_build_share_one_read_of_the_registry() -> TestResult {
     let text = format!(
         "[registry]\ndocument = {document}\n\n[federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let read = read_registry(&settings);
     let deployment = Deployment::of(
         settings.server.base_path.clone(),
@@ -349,7 +350,8 @@ fn a_failed_read_stops_the_build_on_the_same_typed_error() -> TestResult {
     let text = format!(
         "[registry]\ndocument = {document}\n\n[federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let read = read_registry(&settings);
     assert!(matches!(read, Some(Err(FederationError::Registry { .. }))));
     let Err(StateError::Federation(FederationError::Registry { path, .. })) =
@@ -385,7 +387,8 @@ fn no_secret_from_the_configuration_reaches_the_banner() -> TestResult {
          [credentials.\"node-b-pub\"]\nuser = \"{SECRET}-user\"\npassword = \"{SECRET}-password\"\n\n\
          [[dev.crossref]]\nnamespace = \"{NAMESPACE}\"\nvalue = \"{PATIENT}\"\nmember = \"node-a\"\nehr_id = \"7d44b88c-4199-4bad-97dc-d78268e01398\"\n"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let document = read_registry(&settings);
     let deployment = Deployment::of(
         settings.server.base_path.clone(),
@@ -419,7 +422,8 @@ fn a_registry_document_that_does_not_load_is_named_unreadable() -> TestResult {
     let text = format!(
         "[registry]\ndocument = {document}\n\n[federation]\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let document = read_registry(&settings);
     let deployment = Deployment::of(
         settings.server.base_path.clone(),

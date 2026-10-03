@@ -103,7 +103,8 @@ fn config(
 
 /// The router over the federation `text` loads.
 fn gateway(text: &str) -> Result<Router, Box<dyn Error>> {
-    let settings = Config::from_sources(Some(text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?.resolve()?;
     let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
     Ok(ferrofed_server::router(
         Arc::new(AppState::with_federation(federation)),
@@ -113,7 +114,8 @@ fn gateway(text: &str) -> Result<Router, Box<dyn Error>> {
 
 /// The federation `text` loads, or why it does not.
 fn load(text: &str) -> Result<Result<Option<Federation>, FederationError>, Box<dyn Error>> {
-    let settings = Config::from_sources(Some(text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?.resolve()?;
     Ok(Federation::load(&settings))
 }
 

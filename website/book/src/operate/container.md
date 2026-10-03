@@ -36,15 +36,19 @@ Compose and no checkout of the repository.
 3. Edit `ferrofed.toml`, the [gateway configuration](configuration.md): your
    federation id, your PIX Manager's URL with each node's `ehr_id` domain there
    ([Identity resolution](identity.md)), and a `[credentials."<endpoint id>"]`
-   section for each endpoint that needs one. Every value to change is marked
-   `EDIT`.
-4. Put each credential in its own file in `secrets/`, under the name
-   `ferrofed.toml` gives it after `/run/secrets/ferrofed/`. The gateway runs as
-   uid 65532, so that user must be able to read each file:
+   section for each endpoint that needs one, and `[signing] jwks_uri`, the
+   address the nodes fetch the gateway's JWK Set from. Every value to change
+   is marked `EDIT`.
+4. Put each credential, and the gateway's signing key, in its own file in
+   `secrets/`, under the name `ferrofed.toml` gives it after
+   `/run/secrets/ferrofed/`. The gateway runs as uid 65532, so that user must
+   be able to read each file:
 
    ```sh
    mkdir -p secrets
    printf '%s\n' "$PIX_TOKEN" > secrets/pix-token
+   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 \
+     -out secrets/signing-key.pem
    sudo chown -R 65532:65532 secrets && sudo chmod 0400 secrets/*
    ```
 
@@ -56,9 +60,9 @@ Compose and no checkout of the repository.
    ```
 
 A credential is never written in `ferrofed.toml`: each one is a file, named by
-a `bearer_token_file` or `password_file` key. Compose mounts `ferrofed.toml`,
-`registry.toml` and `secrets/` read-only at `/etc/ferrofed/` and
-`/run/secrets/ferrofed/`. A missing `ferrofed.toml` or `registry.toml` stops
+a `bearer_token_file` or `password_file` key, and so is the signing key,
+named by `key_file`. Compose mounts `ferrofed.toml`, `registry.toml` and
+`secrets/` read-only at `/etc/ferrofed/` and `/run/secrets/ferrofed/`. A missing `ferrofed.toml` or `registry.toml` stops
 `docker compose up`; a missing `secrets/` is created empty.
 
 A configuration the gateway refuses stops it with exit code 78, and
@@ -194,10 +198,17 @@ gh attestation verify ferrofed-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz \
 ## The quickstart
 
 ```sh
+scripts/quickstart/signing-key.sh
 docker compose up --wait
 scripts/quickstart/seed.sh
 curl http://127.0.0.1:8080/health
 ```
+
+`scripts/quickstart/signing-key.sh` writes the gateway's development
+signing key into `docker/quickstart/signing/`, which is never committed, and
+keeps a key that exists. The gateway signs the caller's identity onto every
+request to a node with it, and refuses to start without it
+([What a node is told about the caller](authentication.md#what-a-node-is-told-about-the-caller)).
 
 `--wait` returns once every service reports healthy. The gateway service
 runs `ghcr.io/ferrohealth/ferrofed` at the product version, the tag default

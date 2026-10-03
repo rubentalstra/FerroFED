@@ -8,7 +8,8 @@
 use openehr_query::printer::escape_string;
 use secrecy::ExposeSecret;
 
-use super::{Withheld, percent_decoded};
+use super::Withheld;
+use super::decode::percent_decoded;
 
 /// The text that stands in for a withheld identifier ([`Withheld::masked`]).
 pub const MASK: &str = "[withheld]";

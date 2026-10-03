@@ -13,7 +13,8 @@
 //! client before each attempt, caches it, and drops it when the node answers
 //! `401`. An onward token that cannot be obtained fails that node; the
 //! gateway never dispatches unauthenticated. The caller's own token is never
-//! forwarded to a node.
+//! forwarded to a node; what a node is told about the caller is a token of
+//! the gateway's own, signed with the same keys ([`conveyance`]; N24).
 //!
 //! The grant is the one onward mechanism built. RFC 8693 token exchange and
 //! `DPoP` proofs (RFC 9449) are further [`Grant`] kinds and a transport
@@ -26,6 +27,7 @@ use ferrofed_registry::secret::SecretUrl;
 use openehr_sdt::smart_scopes::{Compartment, SmartScope};
 use url::Url;
 
+pub mod conveyance;
 pub mod keys;
 pub mod provider;
 pub mod token;

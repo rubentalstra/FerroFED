@@ -81,7 +81,8 @@ fn booting(dir: &Path, a: &str, b: &str) -> Result<Arc<AppState>, Box<dyn Error>
          per_node_timeout_ms = 2000\noverall_timeout_ms = 3000\n\n\
          [stored_queries]\npath = {store}\n{rows}"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     Ok(Arc::new(AppState::build(&settings)?))
 }
 

@@ -412,7 +412,8 @@ async fn a_redistribution_every_member_rejects_is_a_424_and_the_registry_is_unch
 /// The state of a gateway with no registry, whose `[metrics]` table is
 /// `metrics`.
 fn bare(metrics: &str) -> Result<(Arc<AppState>, Option<std::net::SocketAddr>), Box<dyn Error>> {
-    let settings = Config::from_sources(Some(metrics), &BTreeMap::new())?.resolve()?;
+    let settings = Config::from_sources(Some(&crate::support::signed(metrics)), &BTreeMap::new())?
+        .resolve()?;
     let listen = settings.metrics.listen;
     let state = Arc::new(AppState::build(&settings)?);
     let listener = admin::listener(&settings.metrics, &state).map(|(address, _app)| address);
@@ -441,7 +442,7 @@ async fn the_admin_action_exists_only_on_the_admin_listener() -> TestResult {
 #[test]
 fn the_admin_listener_is_refused_off_loopback_without_allow_remote() -> TestResult {
     let remote = "[metrics]\nlisten = \"192.0.2.10:9464\"\n";
-    let refused = Config::from_sources(Some(remote), &BTreeMap::new())?
+    let refused = Config::from_sources(Some(&crate::support::signed(remote)), &BTreeMap::new())?
         .resolve()
         .err()
         .ok_or("a remote admin listener is refused")?;
@@ -450,7 +451,9 @@ fn the_admin_listener_is_refused_off_loopback_without_allow_remote() -> TestResu
         "{refused}"
     );
     let settings = Config::from_sources(
-        Some(&format!("{remote}allow_remote = true\n")),
+        Some(&crate::support::signed(&format!(
+            "{remote}allow_remote = true\n"
+        ))),
         &BTreeMap::new(),
     )?
     .resolve()?;

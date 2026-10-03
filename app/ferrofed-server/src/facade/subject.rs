@@ -153,7 +153,7 @@ pub(crate) async fn serve(
         "routed the read of an EHR by subject to the member that resolved it"
     );
     let withheld = Arc::new(Withheld::new([subject.value]));
-    let options = DispatchOptions::new(budget.per_node())
+    let options = DispatchOptions::new(budget.per_node(), arrived.conveyance.clone())
         .with_request_id(arrived.outbound)
         .with_withheld(withheld)
         .with_composed_ehr_id(ehr_id.clone());

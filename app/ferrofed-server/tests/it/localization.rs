@@ -167,7 +167,9 @@ impl TestConfig {
     /// The federation the configuration loads.
     fn load(&self) -> Result<Federation, Box<dyn Error>> {
         std::fs::write(&self.registry.0, &self.registry.1)?;
-        let settings = Config::from_sources(Some(&self.text), &BTreeMap::new())?.resolve()?;
+        let settings =
+            Config::from_sources(Some(&crate::support::signed(&self.text)), &BTreeMap::new())?
+                .resolve()?;
         Ok(Federation::load(&settings)?.ok_or("a registry is configured")?)
     }
 
@@ -440,7 +442,11 @@ async fn ask_all_on_failure_asks_every_member_only_where_it_is_declared() -> Tes
         "on_failure = \"ask-all\"",
         &crossref(&MEMBERS),
     );
-    let settings = Config::from_sources(Some(&declared.text), &BTreeMap::new())?.resolve()?;
+    let settings = Config::from_sources(
+        Some(&crate::support::signed(&declared.text)),
+        &BTreeMap::new(),
+    )?
+    .resolve()?;
     let on_failure = settings
         .federation
         .localization
@@ -482,7 +488,11 @@ async fn without_the_declaration_a_failed_localizer_is_never_widened_to_ask_all(
     let dir = tempfile::tempdir()?;
     let [a, b, c] = urls(&servers);
     let undeclared = config(dir.path(), [&a, &b, &c], "", &crossref(&MEMBERS));
-    let settings = Config::from_sources(Some(&undeclared.text), &BTreeMap::new())?.resolve()?;
+    let settings = Config::from_sources(
+        Some(&crate::support::signed(&undeclared.text)),
+        &BTreeMap::new(),
+    )?
+    .resolve()?;
     let on_failure = settings
         .federation
         .localization
@@ -645,7 +655,8 @@ fn localized(dir: &Path, federation: &str) -> Result<String, Box<dyn Error>> {
 
 /// The federation `text` loads, or why it does not.
 fn load(text: &str) -> Result<Result<Option<Federation>, FederationError>, Box<dyn Error>> {
-    let settings = Config::from_sources(Some(text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?.resolve()?;
     Ok(Federation::load(&settings))
 }
 
@@ -675,7 +686,7 @@ fn a_localization_table_under_ask_all_refuses_to_boot() -> TestResult {
 #[test]
 fn a_localization_budget_past_the_overall_budget_refuses_to_boot() -> TestResult {
     let text = "[federation]\noverall_timeout_ms = 3000\nnode_selection = \"localized\"\n\n[federation.localization]\ntimeout_ms = 3000\n";
-    match Config::from_sources(Some(text), &BTreeMap::new())?.resolve() {
+    match Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new())?.resolve() {
         Err(ferrofed_server::config::error::Error::LocalizationBudget {
             timeout_ms: 3000,
             overall_ms: 3000,
@@ -689,7 +700,7 @@ fn a_localization_budget_past_the_overall_budget_refuses_to_boot() -> TestResult
 #[test]
 fn an_on_failure_policy_the_specification_does_not_name_refuses_to_boot() -> TestResult {
     let text = "[federation]\nnode_selection = \"localized\"\n\n[federation.localization]\non_failure = \"open\"\n";
-    match Config::from_sources(Some(text), &BTreeMap::new()) {
+    match Config::from_sources(Some(&crate::support::signed(text)), &BTreeMap::new()) {
         Err(ferrofed_server::config::error::Error::Parse { .. }) => Ok(()),
         other => Err(format!("§14.1 names closed and ask-all only: {other:?}").into()),
     }

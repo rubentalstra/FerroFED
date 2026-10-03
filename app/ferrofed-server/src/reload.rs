@@ -466,6 +466,7 @@ fn federation_class(error: &FederationError) -> &'static str {
         | FederationError::Grant { .. } => "credentials",
         FederationError::Clients(_) => "node-clients",
         FederationError::Transport(_) => "http-client",
+        FederationError::Unsigned => "signing",
     }
 }
 

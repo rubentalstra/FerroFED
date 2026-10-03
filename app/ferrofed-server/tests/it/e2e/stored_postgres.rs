@@ -51,7 +51,8 @@ fn gateway(dir: &Path, members: (&str, &str), url: &str) -> Result<Router, Box<d
          per_node_timeout_ms = 2000\noverall_timeout_ms = 3000\n\n\
          [stored_queries]\nbackend = \"postgres\"\nurl = {url}\n{rows}"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let state = tokio::task::block_in_place(|| AppState::build(&settings))?;
     Ok(ferrofed_server::router(
         Arc::new(state),

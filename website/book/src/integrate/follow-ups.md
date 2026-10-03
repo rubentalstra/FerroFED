@@ -128,7 +128,10 @@ A routed request reaches the node as you sent it:
   headers, the ones that operation lists), and no other header. `If-Match`
   reaches the node on a `PUT`, for example, and never on a `GET`. Your
   `Authorization` never reaches a node: the gateway authenticates to each node
-  with that node's own credentials (§13). Neither does your `X-Request-Id`:
+  with that node's own credentials, and tells the node who you are in an
+  `openEHR-federation-client` token it signs itself (§13.1, N24,
+  [What a node is told about the caller](../operate/authentication.md#what-a-node-is-told-about-the-caller)).
+  Neither does your `X-Request-Id`:
   the node receives the gateway's own id for the request. Nor do the
   targeting headers, which mean nothing at a node (§8.4);
 - the query string, when the operation declares every parameter in it (such

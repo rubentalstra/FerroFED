@@ -174,7 +174,9 @@ impl Setup {
         let b = node_answering("uid-at-b::cdr-b.example.org::1").await;
         let dir = tempfile::tempdir()?;
         let text = settings_text(dir.path(), (&a, &b), mode, rows)?;
-        let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+        let settings =
+            Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?
+                .resolve()?;
         let app =
             ferrofed_server::router(Arc::new(AppState::build(&settings)?), &settings_with_room());
         Ok(Self {

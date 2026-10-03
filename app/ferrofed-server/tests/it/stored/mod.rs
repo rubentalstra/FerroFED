@@ -86,7 +86,8 @@ pub(crate) fn gateway(
     let document = dir.join("registry.toml");
     std::fs::write(&document, registry)?;
     let text = settings_text(&document, &store_file(dir), rows);
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let state = AppState::build(&settings)?;
     Ok(ferrofed_server::router(
         Arc::new(state),

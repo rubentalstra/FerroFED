@@ -45,10 +45,10 @@ async fn an_applied_and_a_refused_reload_each_count_under_their_result() -> Test
     let named = toml::Value::String(document.display().to_string());
     std::fs::write(
         &config,
-        format!(
+        crate::support::signed(&format!(
             "profile = \"development\"\n\n[registry]\ndocument = {named}\n\n[federation]\nper_node_timeout_ms = 2000\noverall_timeout_ms = 3000\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{}",
             crossref(&[("node-a", EHR_A), ("node-b", EHR_B)])
-        ),
+        )),
     )?;
     let settings = Config::load(Some(&config))?.resolve()?;
     let state = Arc::new(AppState::build(&settings)?);

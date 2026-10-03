@@ -12,10 +12,11 @@
 #   3. given a static Linux ferrofed binary, `ferrofed config check` accepts
 #      the example ferrofed.toml and registry.toml exactly as attached, mounted
 #      at the paths the rendered compose file mounts them, in the pinned base
-#      image of docker/Dockerfile, with synthetic files for the credentials
-#      the example names; and it refuses the same configuration once a member
-#      is left out of the PIX Manager, naming that member, and once the PIX
-#      Manager's credential would travel over plain http, naming its URL key.
+#      image of docker/Dockerfile, with a synthetic file for each credential
+#      the example names and a synthetic ES384 key for each signing key; and
+#      it refuses the same configuration once a member is left out of the
+#      PIX Manager, naming that member, and once the PIX Manager's credential
+#      would travel over plain http, naming its URL key.
 #
 # Usage:
 #   scripts/checks/release-compose.sh                  checks 1 and 2
@@ -23,7 +24,8 @@
 #                                                      is a static Linux
 #                                                      build for this host's
 #                                                      architecture
-# Needs `docker compose` and `jq`. Exit 1 naming each failure; 0 otherwise.
+# Needs `docker compose`, `jq` and `openssl`. Exit 1 naming each failure; 0
+# otherwise.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -73,6 +75,12 @@ mkdir "$work/secrets"
 while IFS= read -r secret; do
   printf 'synthetic-%s\n' "$secret" > "$work/secrets/$secret"
 done < <(sed -nE 's|^[a-z_]+_file[[:space:]]*=[[:space:]]*"/run/secrets/ferrofed/([^"]+)"[[:space:]]*$|\1|p' "$work/ferrofed.toml")
+# A signing key is read as one, so each key_file holds a synthetic ES384 key.
+while IFS= read -r key; do
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 \
+    -out "$work/secrets/$key" 2> /dev/null ||
+    bad "a synthetic signing key could not be generated for $key"
+done < <(sed -nE 's|^key_file[[:space:]]*=[[:space:]]*"/run/secrets/ferrofed/([^"]+)"[[:space:]]*$|\1|p' "$work/ferrofed.toml")
 chmod -R a+rX "$work"
 
 echo "== the release compose file renders"

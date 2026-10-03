@@ -159,7 +159,9 @@ impl Nodes {
                 "\n[[dev.crossref]]\nnamespace = \"{NAMESPACE}\"\nvalue = \"12345\"\nmember = \"{member}\"\nehr_id = \"{ehr_id}\"\n"
             )?;
         }
-        let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+        let settings =
+            Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?
+                .resolve()?;
         let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
         Ok(ferrofed_server::router(
             Arc::new(AppState::with_federation(federation)),

@@ -301,7 +301,8 @@ async fn a_member_request_that_never_left_the_gateway_is_neither_counted_nor_tim
         Context::new(Targeting::AskAll),
         Budget::new(Duration::from_secs(2), Duration::from_secs(3))?,
     )
-    .with_template_fan_out(true);
+    .with_template_fan_out(true)
+    .with_signer(crate::support::signer("example-federation")?);
     let state = Arc::new(AppState::with_federation(federation));
     let app = ferrofed_server::router(Arc::clone(&state), &settings_with_room());
     let template = "<template><template_id><value>synthetic.t.v1</value></template_id></template>";

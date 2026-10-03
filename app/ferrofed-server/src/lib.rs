@@ -51,6 +51,7 @@ pub mod base_path;
 pub mod body;
 pub mod cli;
 pub mod config;
+pub mod conveyed;
 mod development;
 pub mod error;
 pub mod facade;
@@ -76,16 +77,13 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Bytes;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use clap::Parser;
-use ferrofed_engine::outbound_id::OutboundId;
 use ferrofed_identity::dev::Profile;
-use http::{HeaderMap, Method, StatusCode, Uri};
-use openehr_its::rest::routes::{self, Lookup};
+use http::{HeaderMap, StatusCode};
 use tokio::net::TcpListener;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -498,9 +496,9 @@ pub fn router(state: Arc<AppState>, server: &ServerSettings) -> Router {
             facade::QUERY_AQL,
             get(facade::query_aql_get)
                 .post(facade::query_aql)
-                .fallback(unrouted),
+                .fallback(facade::route::unrouted),
         )
-        .fallback(unrouted);
+        .fallback(facade::route::unrouted);
     let routes = if server.base_path.is_root() {
         surface.route("/", base_root())
     } else {
@@ -596,61 +594,6 @@ async fn dependencies(State(state): State<Arc<AppState>>) -> Json<health::depend
             .map(|federation| federation.dependencies().report())
             .unwrap_or_default(),
     )
-}
-
-/// Every path no route serves.
-///
-/// A path under [`ITS_REST_PREFIX`] is part of the ITS-REST surface: a
-/// request to an EHR resource under a path `ehr_id`, the creation of an
-/// EHR, a definition request the stored-query registry does not hold, and a
-/// DEMOGRAPHIC request naming the endpoint the deployment declared for it, is
-/// routed to one node ([`facade::route`]; §7a.1, §12.4, §12.6), `OPTIONS`
-/// names the methods the gateway serves for the path
-/// ([`facade::options::allow`]; §7a.2), and every other path answers `501`
-/// (§7a.1, N32), because a `404` would claim the resource does not exist.
-/// Every other path answers `404`. No answer of the gateway's own echoes the path.
-///
-/// A routed request reaches its node under the request's [`OutboundId`],
-/// never the client's `x-request-id` (§5.4.1, N33).
-async fn unrouted(
-    State(state): State<Arc<AppState>>,
-    outbound: Option<Extension<OutboundId>>,
-    method: Method,
-    uri: Uri,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let request_id = request_id::of(&headers).unwrap_or_default();
-    let outbound = outbound.map_or_else(OutboundId::mint, |Extension(id)| id);
-    let Some(path) = uri
-        .path()
-        .strip_prefix(ITS_REST_PREFIX.trim_end_matches('/'))
-        .filter(|path| path.starts_with('/'))
-    else {
-        return error::fixed(error::Code::NotFound, request_id);
-    };
-    if method == Method::OPTIONS {
-        return facade::options::allow(&state, path, request_id);
-    }
-    let mut arrived = facade::route::Arrived {
-        method: &method,
-        path,
-        uri: &uri,
-        headers: &headers,
-        body,
-        request_id,
-        outbound,
-    };
-    let federation = state.federation();
-    if let (Some(federation), Some(definitions)) = (federation.as_deref(), state.definitions())
-        && let Lookup::Matched(matched) = routes::lookup(&method, path)
-    {
-        match facade::stored::serve(federation, definitions, &matched, arrived).await {
-            Ok(response) => return response,
-            Err(unanswered) => arrived = unanswered,
-        }
-    }
-    facade::route::serve(federation.as_deref(), arrived).await
 }
 
 /// Serves `app` on an already-bound listener until the process receives

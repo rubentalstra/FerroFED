@@ -69,7 +69,8 @@ pub(crate) fn gateway_at(
     let text = format!(
         "profile = \"development\"\n\n[server]\nbase_path = \"{base}\"\nrequest_timeout_ms = 10000\n\n[registry]\ndocument = {document}\n\n[federation]\nper_node_timeout_ms = 2000\noverall_timeout_ms = 3000\nnode_selection = \"ask-all\"\nid = \"example-federation\"\n\n{rows}"
     );
-    let settings = Config::from_sources(Some(&text), &BTreeMap::new())?.resolve()?;
+    let settings =
+        Config::from_sources(Some(&crate::support::signed(&text)), &BTreeMap::new())?.resolve()?;
     let federation = Federation::load(&settings)?.ok_or("a registry is configured")?;
     let mut server = settings_with_room();
     server.base_path = settings.server.base_path.clone();
@@ -337,7 +338,7 @@ fn resolved(text: &str, env: &[(&str, &str)]) -> Result<Settings, error::Error> 
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
         .collect();
-    Config::from_sources(Some(text), &env)?.resolve()
+    Config::from_sources(Some(&crate::support::signed(text)), &env)?.resolve()
 }
 
 // conformance: CP-21
