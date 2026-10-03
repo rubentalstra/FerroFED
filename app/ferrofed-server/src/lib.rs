@@ -592,16 +592,10 @@ async fn readiness(State(state): State<Arc<AppState>>) -> Response {
     (readiness.status(), Json(readiness)).into_response()
 }
 
-/// `GET /health/dependencies`: the last observed state of each member
-/// endpoint, of the resolver, of the consent pre-filter and of the care
-/// services directory, always `200`.
+/// `GET /health/dependencies`: the last observed state of each dependency,
+/// always `200` ([`AppState::dependencies`]).
 async fn dependencies(State(state): State<Arc<AppState>>) -> Json<health::dependencies::Report> {
-    let mut report = state
-        .federation()
-        .map(|federation| federation.dependencies().report())
-        .unwrap_or_default();
-    report.directory = state.directory().map(|directory| directory.observed());
-    Json(report)
+    Json(state.dependencies())
 }
 
 /// Every path no route serves.

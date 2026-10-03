@@ -205,6 +205,20 @@ impl AppState {
         self
     }
 
+    /// Returns the report `GET /health/dependencies` answers with: the last
+    /// observed state of each member endpoint, of the resolver, of the
+    /// consent pre-filter, of the localizer and of the care services
+    /// directory.
+    #[must_use]
+    pub fn dependencies(&self) -> crate::health::dependencies::Report {
+        let mut report = self
+            .federation()
+            .map(|federation| federation.dependencies().report())
+            .unwrap_or_default();
+        report.directory = self.directory().map(|directory| directory.observed());
+        report
+    }
+
     /// Returns the care services directory the registry is kept in step
     /// with, when it is read from one.
     #[must_use]

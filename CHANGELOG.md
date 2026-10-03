@@ -41,9 +41,9 @@ shaping, single-node routing and the targeting mechanisms in 0.0.6.
   (`registry-budget`), so a faulty or hostile directory can neither hold the
   gateway nor fill its memory, and a partial answer never becomes the
   registry. A directory that cannot be reached keeps the running registry,
-  and every outcome shows on `GET /health/dependencies` as `directory`. `config check` reads the
-  directory too, and refuses credentials for it over plain `http` outside
-  the development profile.
+  and every outcome shows on `GET /health/dependencies` as `directory`.
+  `config check` reads the directory too. Credentials for the directory
+  travel over `https` only, outside the development profile (#402).
 - `ihe-iti` 0.0.13: the `mcsd` feature carries the ITI-90 Query Client and
   the ITI-91 Update Client (`McsdClient`), every walk bounded by one
   `Budget` (a deadline and caps on pages, bytes and entries), and a replica
