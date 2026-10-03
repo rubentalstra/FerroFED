@@ -112,8 +112,8 @@ flowchart TB
 - **Merge:** orders, de-duplicates and cuts the rows across nodes, and
   reports every member with its status (§9 to §11, N13, N16, N37, N39).
 - **Registry snapshot:** the members you admitted, read from a reviewed
-  document into an immutable snapshot, and the follow-up routing table
-  (§12b, N21).
+  document or an mCSD care services directory into an immutable snapshot,
+  and the follow-up routing table (§12b, §15.1, N21).
 - **Stored-query store:** the definitions the gateway holds when you offer
   the stored-query registry (§12.7, N44).
 - **Admin listener:** a second listener for your operators only: the
@@ -127,7 +127,7 @@ so where each piece of state lives is FerroFED's own design.
 
 | State | Where it lives | Survives a restart |
 |---|---|---|
-| Organisations, nodes, endpoints, `system_id`s and `creating_system_id` mappings | the registry document you review, loaded into a snapshot | yes, it is your file |
+| Organisations, nodes, endpoints, `system_id`s and `creating_system_id` mappings | the registry document you review, or the mCSD directory, loaded into a snapshot | yes, it is your file or your directory |
 | `ehr_id` to node index | memory, bounded, least recently used out first | no |
 | `creating_system_id` routes learned from answers | memory | no |
 | Resolution bindings per client session | memory, under a lifetime; not held yet: the caller is verified, and bindings per verified caller are planned ([#412](https://github.com/FerroHEALTH/FerroFED/issues/412)) | no |

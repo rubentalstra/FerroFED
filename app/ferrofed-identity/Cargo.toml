@@ -23,6 +23,9 @@ http.workspace = true
 # registry document in FHIR form (#74) over its mCSD directory reader, and the
 # XCPD localizer (#85) over its ITI-55 client.
 ihe-iti = { workspace = true, features = ["mcsd", "pixm", "xcpd"] }
+# The instant an ITI-91 refresh asks from, read off the directory's `Date`
+# (#86).
+jiff.workspace = true
 # The Authorization value of the PIX Manager credentials, composed as the
 # node client composes it (RFC 7617 §2, RFC 6750 §2.1).
 openehr-its = { workspace = true, features = ["rest-client"] }

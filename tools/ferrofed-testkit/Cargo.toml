@@ -26,7 +26,8 @@ http.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["server", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }
-# The test issuer's timestamps (#80).
+# The test issuer's timestamps (#80), and the clock reading the harness
+# directory stamps its answers with (#86).
 jiff.workspace = true
 # The harness token endpoint verifies each client assertion against the
 # published JWK Set (#81), and the test issuer signs its tokens (#80).
@@ -54,9 +55,10 @@ uuid.workspace = true
 wiremock.workspace = true
 
 [dev-dependencies]
-# The PIXm client the harness PIX Manager is held to (#42), and the XCPD
-# client the stub responding gateway is held to (#85).
-ihe-iti = { workspace = true, features = ["pixm", "xcpd"] }
+# The PIXm client the harness PIX Manager is held to (#42), the XCPD client
+# the stub responding gateway is held to (#85), and the mCSD client the
+# harness directory is held to (#86).
+ihe-iti = { workspace = true, features = ["mcsd", "pixm", "xcpd"] }
 secrecy.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "net", "sync"] }
 

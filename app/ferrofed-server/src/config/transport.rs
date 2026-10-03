@@ -20,7 +20,8 @@
 //! The protected-payload sites are a registry endpoint with a
 //! `[credentials."<id>"]` section, the token endpoint of that section's OAuth
 //! 2.0 grant, every PIX Manager and every XCPD responding gateway (each is
-//! sent the patient identifier, and a credential when one is configured), and
+//! sent the patient identifier, and a credential when one is configured), the
+//! care services directory of `[registry.mcsd]` when it has credentials, and
 //! `metrics.otlp_endpoint` when it carries a user name or a password. Any
 //! other URL may stay `http`. The encrypted-connection site is the
 //! stored-query store's PostgreSQL connection string, whose `sslmode` must be
@@ -244,6 +245,13 @@ pub fn check(
             hold(gateway.url.expose(), identity_site(&key, assertion))?;
         }
     }
+    if let Some(directory) = settings
+        .registry_directory
+        .as_ref()
+        .filter(|directory| directory.credentials.is_some())
+    {
+        hold(directory.url.expose(), directory_site())?;
+    }
     if let Some(endpoint) = &settings.metrics.otlp_endpoint {
         let carries = Url::parse(endpoint.expose())
             .is_ok_and(|parsed| !parsed.username().is_empty() || parsed.password().is_some());
@@ -268,6 +276,16 @@ pub fn check(
         cleartext.extend(encrypted_connection(profile, requires_tls, site)?);
     }
     Ok(cleartext)
+}
+
+/// The site of the care services directory of `[registry.mcsd]`: its `url`,
+/// sent the credentials of its own section.
+#[must_use]
+pub fn directory_site() -> ProtectedSite {
+    ProtectedSite {
+        url_key: String::from("registry.mcsd.url"),
+        payload: String::from("registry.mcsd.credentials"),
+    }
 }
 
 /// The site of the identity service configured at `key`, such as

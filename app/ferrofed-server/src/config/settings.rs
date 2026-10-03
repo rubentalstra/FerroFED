@@ -41,6 +41,9 @@ pub struct Settings {
     pub registry_document: Option<PathBuf>,
     /// The form the registry document is written in.
     pub registry_format: RegistryFormat,
+    /// The mCSD care services directory the registry is read from, when it
+    /// is read from one (§15.1, Annex A.5).
+    pub registry_directory: Option<DirectorySettings>,
     /// The federated query.
     pub federation: FederationSettings,
     /// The outbound credentials, by endpoint id.
@@ -69,6 +72,54 @@ pub struct SigningSettings {
     pub jwks_uri: Uri,
     /// How long a client assertion is valid.
     pub assertion_lifetime: Duration,
+}
+
+/// The mCSD care services directory the registry is read from, resolved.
+#[derive(Debug)]
+pub struct DirectorySettings {
+    /// The directory's FHIR base URL, already known to parse as an `http` or
+    /// `https` URL with no user name or password.
+    pub url: SecretUrl,
+    /// How the gateway authenticates to it: a bearer token or basic
+    /// credentials.
+    pub credentials: Option<Scheme>,
+    /// How often the changes are asked for.
+    pub refresh_interval: Duration,
+    /// How long one whole read or refresh may take.
+    pub deadline: Duration,
+    /// The most pages one read or refresh may read.
+    pub max_pages: usize,
+    /// The most bytes of answer bodies one read or refresh may read.
+    pub max_bytes: usize,
+    /// The most Bundle entries one read or refresh may read.
+    pub max_entries: usize,
+}
+
+impl DirectorySettings {
+    /// Whether `other` names the same directory, credentials, interval,
+    /// deadline and caps.
+    #[must_use]
+    pub fn same_as(&self, other: &Self) -> bool {
+        let credentials = match (&self.credentials, &other.credentials) {
+            (None, None) => true,
+            (Some(Scheme::Bearer(was)), Some(Scheme::Bearer(now))) => was == now,
+            (
+                Some(Scheme::Basic { user, password }),
+                Some(Scheme::Basic {
+                    user: now_user,
+                    password: now_password,
+                }),
+            ) => user == now_user && password == now_password,
+            _ => false,
+        };
+        credentials
+            && self.url.expose() == other.url.expose()
+            && self.refresh_interval == other.refresh_interval
+            && self.deadline == other.deadline
+            && self.max_pages == other.max_pages
+            && self.max_bytes == other.max_bytes
+            && self.max_entries == other.max_entries
+    }
 }
 
 /// The PIXm resolver, resolved.
@@ -201,6 +252,13 @@ pub enum Scheme {
 }
 
 impl Settings {
+    /// Whether the gateway federates: a registry document or a care services
+    /// directory names its members.
+    #[must_use]
+    pub fn federates(&self) -> bool {
+        self.registry_document.is_some() || self.registry_directory.is_some()
+    }
+
     /// Logs what this process is configured to reach, never a value.
     ///
     /// The line names the endpoints that carry credentials and never the
@@ -220,6 +278,11 @@ impl Settings {
             profile = ?self.profile,
             registry = self.registry_document.is_some(),
             registry_format = ?self.registry_format,
+            registry_directory = self.registry_directory.is_some(),
+            registry_refresh_s = self
+                .registry_directory
+                .as_ref()
+                .map(|directory| directory.refresh_interval.as_secs()),
             federation_id = self.federation.id.as_ref().map(FederationId::as_str),
             node_selection = ?self.federation.node_selection,
             best_effort = self.federation.best_effort,

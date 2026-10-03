@@ -13,6 +13,7 @@ use ferrofed_registry::snapshot::RegistrySnapshot;
 use crate::config::settings::Settings;
 use crate::config::stored_queries::{Backend, Store};
 use crate::config::transport::{self, CleartextError, ProtectedSite};
+use crate::directory::DirectoryRegistry;
 use crate::federation::{Federation, FederationError, read_registry};
 use crate::health::lifecycle::Lifecycle;
 use crate::health::{Built, HealthIndicator, Registry};
@@ -40,6 +41,9 @@ pub struct AppState {
     /// The metrics surface every recording site and the admin listener
     /// share; it outlives every federation a reload builds.
     metrics: Arc<Metrics>,
+    /// The care services directory the registry is kept in step with, when
+    /// it is read from one; it outlives every federation a refresh builds.
+    directory: Option<Arc<DirectoryRegistry>>,
 }
 
 /// A state that cannot be built from the settings.
@@ -137,6 +141,7 @@ impl AppState {
             federation: RwLock::new(federation.map(Arc::new)),
             definitions: definitions.map(Arc::new),
             metrics,
+            directory: None,
         })
     }
 
@@ -173,6 +178,7 @@ impl AppState {
             federation: RwLock::new(None),
             definitions: None,
             metrics: Arc::default(),
+            directory: None,
         }
     }
 
@@ -187,7 +193,37 @@ impl AppState {
             federation: RwLock::new(Some(Arc::new(federation.metered(metrics.nodes())))),
             definitions: None,
             metrics,
+            directory: None,
         }
+    }
+
+    /// Returns this state keeping its registry in step with `directory`,
+    /// whose last observed state `/health/dependencies` reports.
+    #[must_use]
+    pub fn watching(mut self, directory: Arc<DirectoryRegistry>) -> Self {
+        self.directory = Some(directory);
+        self
+    }
+
+    /// Returns the report `GET /health/dependencies` answers with: the last
+    /// observed state of each member endpoint, of the resolver, of the
+    /// consent pre-filter, of the localizer and of the care services
+    /// directory.
+    #[must_use]
+    pub fn dependencies(&self) -> crate::health::dependencies::Report {
+        let mut report = self
+            .federation()
+            .map(|federation| federation.dependencies().report())
+            .unwrap_or_default();
+        report.directory = self.directory().map(|directory| directory.observed());
+        report
+    }
+
+    /// Returns the care services directory the registry is kept in step
+    /// with, when it is read from one.
+    #[must_use]
+    pub fn directory(&self) -> Option<&Arc<DirectoryRegistry>> {
+        self.directory.as_ref()
     }
 
     /// Returns where the process is in its life, which gates readiness.

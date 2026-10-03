@@ -572,7 +572,7 @@ are FerroFED's own design; the missing signal is report T151 on #212.
 | Lifecycle | the PMIR hook: a merge or split (an ITI-93 notification to an ITI-94 subscription) drops every resolution binding it could have made stale, and the TTL bounds the rest; track 8 is provisional and not claimed | #48 (the hook); the subscription is unscheduled | PMIR 1.6.0, vendored with the subscription that first reads it |
 | Localizer | none (ask-all); the PIXm resolver as a registry-scoped localizer, the members whose domain returned an identifier (§14.2's "demographic-registration" kind), over the same ITI-83 call its resolution reuses | #46, #408 | PIXm 3.1.0 |
 | Localizer | XCPD ITI-55 initiating gateway: HL7 v3 over SOAP 1.2 and, in every US network, a SAML XUA assertion, in its own crate | #85 (decision A15) | ITI TF Vol 2 Rev 20.1 |
-| Directory | the static registry document; then mCSD ITI-91 `_history`/`_since` synchronised into the snapshot, plus ITI-90 reads | #36, #74, #86 | mCSD 4.0.0 |
+| Directory | the static registry document, or an mCSD directory: ITI-90 reads at boot, then ITI-91 `_history`/`_since` synchronised into the snapshot (section 8) | #36, #74, #86 | mCSD 4.0.0 |
 | ConsentPrefilter | none; the static development pre-filter (`[[dev.consent_denied]]`, development profile only); then the Annex B Mitz adapter | #83, #87 | none for the development table; `fhir.nl.gf` 0.3.0 for Mitz |
 
 **Built here, movable later.** The protocols live in two published crates
@@ -614,11 +614,11 @@ only in `crates/ihe-iti` (section 11), so the core never compiles it. Its
 `terminology` root set carries every type ITI-83 reads (`Parameters`,
 `OperationOutcome`, `Identifier`, `Reference`, `Bundle`); `resources` joins
 with the PDQm client (#119), whose ITI-78 search answers with `Patient`
-resources, and the mCSD directory reader (#74, then the ITI-90 client of #86)
-reads `Organization` and `Endpoint` from the same set. `ferrofed-identity`
-maps that directory content onto the registry document through `ihe-iti`'s
-accessors, so it names no FHIR type itself. A hand-written struct for a FHIR
-resource is refused by the codegen rule.
+resources, and the mCSD directory reader (#74) and the ITI-90 and ITI-91
+client of #86 read `Organization` and `Endpoint` from the same set.
+`ferrofed-identity` maps that directory content onto the registry document
+through `ihe-iti`'s accessors, so it names no FHIR type itself. A
+hand-written struct for a FHIR resource is refused by the codegen rule.
 
 **The patient identifier inside the gateway.** It is a `PatientRef`: the
 issuing namespace and a `SecretString` value, with redacted `Debug` and
@@ -902,6 +902,36 @@ writing; the reloaded configuration passes the boot checks or is refused and
 the running registry stays. An admin
 surface would need its own authorization design and has its own issue when it
 is planned.
+
+**The registry from an mCSD directory** (#86; §15.1, N21, Annex A.5).
+`[registry.mcsd]` replaces the document with a care services directory, and
+the two are never set together. The members are the directory's
+`Organization`s and `Endpoint`s carrying the FHIR form's
+`organisation-id` and `endpoint-id` identifiers, read with ITI-90's
+`identifier=[system]|` search; the rest of the directory is not the
+federation's. `ihe-iti`'s `Replica` holds them, `ferrofed-identity` maps them
+through the FHIR form's own mapping, and the server keeps them in step: every
+`refresh_interval_s` an ITI-91 `_history?_since=` per type, asked from 60
+seconds before the `Date` the directory stamped its previous answer with, so
+the directory's clock decides and a version applied twice changes nothing; a
+directory that sent no readable `Date` is read again whole. A changed
+registry goes through `Federation::reloaded_over`, the reload's own checks,
+with the settings the last reload applied: it replaces the running one, or
+it is refused, logged and counted as a refused reload with the running
+registry kept, and the content advances only with an applied registry, so the
+next refresh asks from the same instant. Each read and refresh draws on one
+`ihe-iti` budget: a deadline for the whole walk, and caps on its pages, bytes
+and entries (30 seconds, 200, 64 MiB and 50,000 by default); running past one
+is refused and counted the same way, and a partial answer never becomes the
+registry. A directory that cannot be reached keeps the registry, and every
+outcome shows as `directory` on `/health/dependencies`. At
+boot a directory that cannot be read, or holds no valid registry, stops the
+start, as a document that does not load does. A `SIGHUP` rebuilds the
+federation over the registry in place and never asks the directory, and a
+change to `[registry.mcsd]` takes a restart. No specification governs the
+selection, the instant or the refresh policy: our own design. The `Directory`
+seam of section 6 is not a trait yet: the document and the directory are the
+two sources the server reads, and both feed the same snapshot and checks.
 
 **The three namespaces** (N32, §12a.1) are three newtypes, `NodeId`,
 `EndpointId` and `SystemId` (the last through `openehr-base`'s lexical rule),

@@ -43,6 +43,7 @@ use openehr_its::rest::client::ReqwestTransport;
 
 use crate::config::settings::{PixmSettings, Scheme, Settings, SigningSettings};
 use crate::config::{NodeSelection, RegistryFormat};
+use crate::directory::DirectoryFailure;
 use crate::facade::options::{self, DescribeError};
 use crate::health::dependencies::Dependencies;
 use crate::localization::{self, LocalizationPolicy};
@@ -123,6 +124,10 @@ pub enum FederationError {
         #[source]
         source: Box<FhirFormError>,
     },
+    /// The registry could not be read from the directory of `[registry.mcsd]`
+    /// (§15.1, §15.2, N19, N20).
+    #[error("the registry could not be read from the care services directory")]
+    Directory(#[source] Box<DirectoryFailure>),
     /// The `[dev]` table is set but no registry document is, so its rows name
     /// members that do not exist.
     #[error("the [dev] cross-reference needs registry.document, whose members its rows name")]
@@ -246,8 +251,10 @@ impl Federation {
         Self::assemble(settings, document, None)
     }
 
-    /// Builds the federation `settings` describe after a registry reload,
-    /// checked exactly as [`Federation::load`] checks it at boot.
+    /// Builds the federation `settings` describe after a registry reload over
+    /// `document`, the registry [`read_registry`] read again or a refresh of
+    /// the care services directory read, checked as [`Federation::load_read`]
+    /// checks it at boot.
     ///
     /// The new federation has its own snapshot, node clients and resolver,
     /// and keeps what this one learned: the resolution bindings, the `ehr_id`
@@ -257,14 +264,14 @@ impl Federation {
     /// unchanged, so a request that took it finishes on it.
     ///
     /// # Errors
-    /// Returns the [`FederationError`] [`Federation::load`] returns for the
-    /// same settings.
-    pub fn reloaded(&self, settings: &Settings) -> Result<Option<Self>, FederationError> {
-        let mut next = Self::assemble(
-            settings,
-            read_registry(settings),
-            Some(Arc::clone(&self.observed)),
-        )?;
+    /// Returns the [`FederationError`] [`Federation::load_read`] returns for
+    /// the same settings and document.
+    pub fn reloaded(
+        &self,
+        settings: &Settings,
+        document: Option<Result<RegistrySnapshot, FederationError>>,
+    ) -> Result<Option<Self>, FederationError> {
+        let mut next = Self::assemble(settings, document, Some(Arc::clone(&self.observed)))?;
         if let (Some(next), Some(instruments)) = (next.as_mut(), self.requests.instruments()) {
             next.requests.metered(instruments.clone());
         }
@@ -672,14 +679,19 @@ impl std::fmt::Debug for Federation {
     }
 }
 
-/// Reads and checks the registry document `settings` name, or returns `None`
-/// when they name none.
+/// Reads and checks the registry document or the care services directory
+/// `settings` name, blocking the caller, or returns `None` for neither.
 ///
 /// The read fails with [`FederationError::Registry`] or
 /// [`FederationError::FhirRegistry`] for a document that cannot be read or
-/// refuses to load; [`Federation::load_read`] stops on that error.
+/// refuses to load, and with [`FederationError::Directory`] for a directory
+/// that cannot be read or holds no valid registry; [`Federation::load_read`]
+/// stops on that error.
 #[must_use]
 pub fn read_registry(settings: &Settings) -> Option<Result<RegistrySnapshot, FederationError>> {
+    if let Some(directory) = &settings.registry_directory {
+        return Some(crate::directory::read(directory));
+    }
     let path = settings.registry_document.as_deref()?;
     Some(read_document(path, settings.registry_format))
 }

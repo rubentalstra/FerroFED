@@ -3,9 +3,10 @@
 
 # The registry
 
-This page covers the registry document and its FHIR form, the federation id,
-node selection, the state the gateway learns (resolution bindings and the
-`ehr_id` index), reloading the document, and integrity incidents.
+This page covers the registry document and its FHIR form, the registry read
+from an mCSD directory, the federation id, node selection, the state the
+gateway learns (resolution bindings and the `ehr_id` index), reloading the
+registry, and integrity incidents.
 
 See how it works: [follow-ups and writes](../how-it-works/follow-ups-and-writes.md), routed with what the registry holds.
 
@@ -120,8 +121,94 @@ the resource, when:
 - anything the native form refuses: a duplicate `system_id`, an unusable base
   URL, or a `creating_system_id` that is a member's own.
 
-Reading the members from an mCSD directory itself, and keeping them in step,
-is planned for v0.0.8 ([#86](https://github.com/FerroHEALTH/FerroFED/issues/86)).
+## The registry read from an mCSD directory
+
+The gateway can read its members from an IHE mCSD 4.0.0 care services
+directory instead of a document, and keep them in step with it. The
+specification proposes mCSD for addressing, and the registry is the local
+materialisation of that mapping (§15.1, N21, Annex A.5). Set
+`[registry.mcsd]` in place of `registry.document`; a configuration that sets
+both is refused.
+
+```toml
+[registry.mcsd]
+url = "https://directory.example.org/fhir"   # the directory's FHIR base
+refresh_interval_s = 300                    # the default; 0 is refused
+deadline_ms = 30000                         # one whole read or refresh, the default
+max_pages = 200                             # the defaults of the three caps
+max_bytes = 67108864                        # 64 MiB of answer bodies
+max_entries = 50000
+
+[registry.mcsd.credentials]                 # when the transport does not authenticate
+bearer_token_file = "/run/secrets/directory-token"
+```
+
+The members are the directory's `Organization`s that carry an
+`https://ferrofed.eu/fhir/sid/organisation-id` identifier and its `Endpoint`s
+that carry an `https://ferrofed.eu/fhir/sid/endpoint-id` identifier, written
+exactly as the FHIR form above. The rest of the directory is not the
+federation's and is never read into the registry. The URL is `http` or
+`https` with no user name or password; the credentials take a bearer token or
+basic credentials, each through its `_file` sibling, and never an OAuth 2.0
+grant. A directory with credentials is `https` outside
+`profile = "development"`, and the configuration is refused before the
+directory is asked otherwise; under that profile the site is reported as
+every other cleartext credential is.
+
+At start, the gateway reads the members with ITI-90, Find Matching Care
+Services: `GET [base]/Organization?identifier=…|` and
+`GET [base]/Endpoint?identifier=…|`, every page. The content then passes
+every check the FHIR form passes: the connection type of §15.2 (N19), one
+managing organisation per endpoint (N20), unique ids, and everything the
+native form refuses. A directory that cannot be read within the deadline
+and the caps, or holds a registry that breaks a rule, stops the start; `config check` reads the directory the
+same way and names the fault.
+
+Every `refresh_interval_s` the gateway asks for the changes since the last
+read with ITI-91, Request Care Services Updates:
+`GET [base]/Organization/_history?_since=…` and the same for `Endpoint`. It
+asks from 60 seconds before the `Date` the directory stamped its previous
+answer with, so the directory's own clock decides and no change is missed;
+a directory that sent no readable `Date` is read again whole with ITI-90. The
+newest version of each resource wins, a deletion removes it, and a version
+that no longer carries the federation's identifier takes it out of the
+registry. A query never waits on the directory: the refresh runs on its own,
+and a request that started before a refresh finishes on the registry it
+started with.
+
+A refresh that changed something goes through the same checks as a reload:
+
+- When the changed registry passes, it replaces the running one, with the
+  effects of a reload (learned routes held to it, entries for a member that
+  left dropped). It logs `registry reloaded` and counts as an applied reload.
+- When it breaks a rule (an endpoint relying on `hl7-fhir-rest`, a `system_id`
+  given to two nodes, an endpoint deleted while an organisation still lists
+  it, a member the resolver does not cover), it is refused. The running
+  registry stays, the gateway logs `registry reload refused` with
+  `class = "registry-invalid"`, and the refusal counts as a refused reload.
+  The next refresh asks again from the same instant, so the registry follows
+  the directory once the directory is put right.
+- When the directory's answer runs past `deadline_ms`, `max_pages`,
+  `max_bytes` or `max_entries`, or does not hold to ITI-91, the refresh is
+  refused the same way, with `class = "registry-budget"` for a limit, and
+  counts as a refused reload. Each limit bounds one whole read or refresh,
+  over every page of both resource types, so a directory that links its
+  pages in a cycle or answers without end cannot hold the gateway or fill
+  its memory. A partial answer never becomes the registry. No
+  specification governs these limits; they are FerroFED's own design.
+- When the directory cannot be reached, or refuses the request with an
+  HTTP error, the running registry stays and the gateway logs a warning.
+
+`GET {base}/health/dependencies` reports the directory as `directory`: `up`
+after its last answer, `failing` after a `5xx`, a malformed answer or one
+past a cap, and `down` when it did not answer before the deadline or could
+not be reached. The directory's state never gates readiness.
+
+A `SIGHUP` reload with a directory rebuilds the federation over the registry
+the directory gave, applying `[credentials]`, `[dev]`, `[pixm]` and
+`[xcpd]`; it never asks the directory. A change to `[registry.mcsd]` takes a
+restart, and a change between a document and a directory is refused as
+`registry-presence`.
 
 ## Federation id
 
@@ -139,9 +226,9 @@ empty id is refused. It is named in the startup log line.
 
 ## Node selection
 
-A gateway that federates (`registry.document` is set) declares how an
-undirected patient query finds its nodes, and refuses to boot without the
-declaration:
+A gateway that federates (`registry.document` or `[registry.mcsd]` is set)
+declares how an undirected patient query finds its nodes, and refuses to
+boot without the declaration:
 
 ```toml
 [federation]
@@ -327,14 +414,16 @@ the same file to see the fault. The classes are:
 | `class` | The fault |
 |---|---|
 | `configuration` | the configuration file does not read or resolve |
-| `registry-unreadable` | the registry document cannot be read |
-| `registry-invalid` | the registry document breaks a registry rule |
+| `registry-unreadable` | the registry document, or the directory, cannot be read |
+| `registry-invalid` | the registry document, or the directory's content, breaks a registry rule |
+| `registry-directory` | the directory of `[registry.mcsd]` cannot be asked as configured |
+| `registry-budget` | a refresh of the directory ran past its deadline or a cap |
 | `credentials` | a `[credentials]` section names an endpoint the document does not declare |
 | `demographic-endpoint` | `federation.demographic_endpoint` names an endpoint the new document does not declare |
 | `dev-cross-reference`, `pixm`, `resolvers` | the resolver refuses the new members, or both resolvers are set |
 | `localization` | the localizer refuses the new members, or the node selection has none |
 | `node-clients`, `http-client`, `self-description` | the node clients or the `OPTIONS {base}/` body cannot be built |
-| `registry-presence` | `registry.document` was set or unset, which takes a restart |
+| `registry-presence` | `registry.document` or `[registry.mcsd]` was set, unset or swapped for the other, which takes a restart |
 | `profile` | `profile` was changed, which takes a restart |
 | `cleartext` | a credential or a patient identifier would travel over a URL that is not `https`, outside the development profile the process started with |
 

@@ -52,6 +52,7 @@ pub mod body;
 pub mod cli;
 pub mod config;
 mod development;
+pub mod directory;
 pub mod error;
 pub mod facade;
 pub mod federation;
@@ -95,6 +96,7 @@ use tower_http::timeout::TimeoutLayer;
 use crate::cli::{AdmissionCommand, Cli, Command, ConfigCommand};
 use crate::config::Config;
 use crate::config::settings::{ServerSettings, Settings};
+use crate::directory::DirectoryRegistry;
 use crate::federation::Federation;
 use crate::health::lifecycle::{Lifecycle, drain_on};
 use crate::state::AppState;
@@ -157,8 +159,7 @@ where
         Command::Config {
             command: ConfigCommand::Check,
         } => match AppState::check(&settings).and_then(|cleartext| {
-            state::admits_callers(&settings, settings.registry_document.is_some())
-                .map(|()| cleartext)
+            state::admits_callers(&settings, settings.federates()).map(|()| cleartext)
         }) {
             Ok(cleartext) => config_checked(&cleartext),
             Err(error) => {
@@ -187,7 +188,7 @@ fn serve_job(settings: Settings, config: Option<PathBuf>) -> ExitCode {
     let stdout_is_terminal = std::io::stdout().is_terminal();
     let no_color = std::env::var_os("NO_COLOR");
     let format = settings.telemetry.format;
-    let document = federation::read_registry(&settings);
+    let (document, directory) = directory::read_source(&settings);
     if banner::prints(format, stdout_is_terminal) {
         let described = document.as_ref().map(Result::as_ref);
         // NOTE: no specification governs this: our own design; a document that
@@ -230,20 +231,23 @@ fn serve_job(settings: Settings, config: Option<PathBuf>) -> ExitCode {
     };
     // NOTE: no specification governs this: our own design; the OTLP push is a
     // tonic client, which is built inside the runtime it will run on.
-    if let Err(error) = state::admits_callers(&settings, settings.registry_document.is_some()) {
+    if let Err(error) = state::admits_callers(&settings, settings.federates()) {
         tracing::error!(error = chain(&error), "cannot start");
         return ExitCode::from(EXIT_CONFIG);
     }
     let entered = runtime.enter();
     let state = match AppState::build_read(&settings, document) {
-        Ok(state) => Arc::new(state),
+        Ok(state) => Arc::new(match &directory {
+            Some(directory) => state.watching(Arc::clone(directory)),
+            None => state,
+        }),
         Err(error) => {
             tracing::error!(error = chain(&error), "cannot start");
             return ExitCode::from(EXIT_CONFIG);
         }
     };
     drop(entered);
-    match serve_command(&runtime, settings, &state, config) {
+    match serve_command(&runtime, settings, &state, config, directory) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(error = format!("{error:#}"), "cannot serve");
@@ -381,6 +385,7 @@ fn serve_command(
     settings: Settings,
     state: &Arc<AppState>,
     config: Option<PathBuf>,
+    directory: Option<Arc<DirectoryRegistry>>,
 ) -> anyhow::Result<()> {
     let server = settings.server.clone();
     let admin = admin::listener(&settings.metrics, state);
@@ -412,11 +417,11 @@ fn serve_command(
                 }
             });
         }
-        tokio::spawn(reload::on_hangup(Arc::new(reload::Reloader::new(
-            config,
-            settings,
-            Arc::clone(state),
-        ))));
+        let reloader = Arc::new(reload::Reloader::new(config, settings, Arc::clone(state)));
+        if let Some(directory) = directory {
+            tokio::spawn(directory.keep_in_step(Arc::clone(&reloader)));
+        }
+        tokio::spawn(reload::on_hangup(reloader));
         let app = router(Arc::clone(state), &server);
         state.lifecycle().booted();
         serve(listener, app, &server, state.lifecycle().clone())
@@ -587,15 +592,10 @@ async fn readiness(State(state): State<Arc<AppState>>) -> Response {
     (readiness.status(), Json(readiness)).into_response()
 }
 
-/// `GET /health/dependencies`: the last observed state of each member
-/// endpoint and of the resolver, always `200`.
+/// `GET /health/dependencies`: the last observed state of each dependency,
+/// always `200` ([`AppState::dependencies`]).
 async fn dependencies(State(state): State<Arc<AppState>>) -> Json<health::dependencies::Report> {
-    Json(
-        state
-            .federation()
-            .map(|federation| federation.dependencies().report())
-            .unwrap_or_default(),
-    )
+    Json(state.dependencies())
 }
 
 /// Every path no route serves.

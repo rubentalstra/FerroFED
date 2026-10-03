@@ -10,7 +10,7 @@ framework, with a feature per profile.
 |---|---|---|
 | `pixm` | Patient Identifier Cross-reference for Mobile | ITI-83 |
 | `pdqm` | Patient Demographics Query for Mobile | ITI-78 |
-| `mcsd` | Mobile Care Services Discovery | ITI-90 |
+| `mcsd` | Mobile Care Services Discovery | ITI-90, ITI-91 |
 | `pmir` | Patient Master Identity Registry | ITI-93, ITI-94 |
 | `xcpd` | Cross-Community Patient Discovery | ITI-55 |
 
@@ -75,6 +75,31 @@ connection type, a status or an identifier is the caller's policy. The
 `Debug` of an entry shows its `fullUrl`, and an endpoint's `address`, with the
 userinfo and the query replaced by `***`, and leaves out an endpoint's
 `header` list.
+
+`ihe_iti::mcsd::client::McsdClient` asks a directory over HTTP. `find` is
+ITI-90, Find Matching Care Services: `GET [base]/Organization` or
+`GET [base]/Endpoint` with the search parameters you give, answered with a
+`searchset` Bundle. `updates` is ITI-91, Request Care Services Updates:
+`GET [base]/[type]/_history?_since=[instant]`, answered with a `history`
+Bundle, newest version first, a deletion as a `DELETE` entry. Both follow
+every `next` link on the directory's own origin and return the `Date` the
+directory stamped its first page with, as written. Every walk draws on a
+`budget::Budget`: one deadline for the whole walk, and caps on the pages,
+the answer bytes and the entries it reads (by default 200 pages, 64 MiB and
+50,000 entries). Running out of any of them is an error, never a shorter
+answer. A status other than `200`, an answer that is not the interaction's
+Bundle, a match of another type and a page link to another origin are errors
+that carry no URL and no text of the directory's. Build the
+`reqwest::Client` you pass in with `redirect::Policy::none()`.
+
+`ihe_iti::mcsd::replica::Replica` holds a directory's `Organization`s and
+`Endpoint`s in a `Scope` (every resource, or those carrying an identifier in
+a system you name), read with ITI-90 and kept in step with ITI-91 from an
+instant you choose, usually from the `Date` it keeps of its last read. The
+newest version of each resource wins, a deletion or a version that leaves
+the scope removes it, and a refresh with no instant reads everything again.
+A refresh returns a new replica and leaves the old one as it was, and
+`directory` answers the content as a `Directory`.
 
 ## XCPD (`xcpd`)
 

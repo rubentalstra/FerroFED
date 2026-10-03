@@ -20,7 +20,9 @@ use super::error::DirectoryError;
 use crate::redact::RedactedUrl;
 
 /// The `Organization` and `Endpoint` resources of one Bundle, in entry order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The default is the content of an empty Bundle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Directory {
     organizations: Vec<DirectoryOrganization>,
     endpoints: Vec<DirectoryEndpoint>,
@@ -93,59 +95,49 @@ impl Directory {
                 found: kind.map(str::to_owned),
             });
         }
-        let mut directory = Self {
-            organizations: Vec::new(),
-            endpoints: Vec::new(),
-        };
-        let mut full_urls = BTreeSet::new();
-        let mut organization_ids = BTreeSet::new();
-        let mut endpoint_ids = BTreeSet::new();
+        let mut builder = Builder::default();
         for (index, entry) in bundle.entry.into_iter().enumerate() {
             let full_url = entry
                 .full_url
                 .and_then(|full_url| full_url.value)
                 .filter(|full_url| !full_url.is_empty());
-            if let Some(full_url) = &full_url
-                && !full_urls.insert(full_url.clone())
-            {
-                return Err(DirectoryError::DuplicateFullUrl { index });
-            }
             match entry.resource {
                 Some(Resource::Organization(resource)) => {
-                    if !resource.modifier_extension.is_empty() {
-                        return Err(DirectoryError::ModifierExtension { index });
-                    }
-                    if let Some(id) = &resource.id
-                        && !organization_ids.insert(id.clone())
-                    {
-                        return Err(DirectoryError::DuplicateId { index });
-                    }
-                    directory.organizations.push(DirectoryOrganization {
-                        entry: index,
-                        full_url,
-                        resource: *resource,
-                    });
+                    builder.organization(index, full_url, *resource)?;
                 }
                 Some(Resource::Endpoint(resource)) => {
-                    if !resource.modifier_extension.is_empty() {
-                        return Err(DirectoryError::ModifierExtension { index });
-                    }
-                    if let Some(id) = &resource.id
-                        && !endpoint_ids.insert(id.clone())
-                    {
-                        return Err(DirectoryError::DuplicateId { index });
-                    }
-                    directory.endpoints.push(DirectoryEndpoint {
-                        entry: index,
-                        full_url,
-                        resource: *resource,
-                    });
+                    builder.endpoint(index, full_url, *resource)?;
                 }
                 Some(_) => return Err(DirectoryError::UnexpectedEntry { index }),
                 None => return Err(DirectoryError::NoResource { index }),
             }
         }
-        Ok(directory)
+        Ok(builder.directory)
+    }
+
+    /// Builds directory content from resources held elsewhere, each with its
+    /// `fullUrl`: the organisations first, then the endpoints, each in the
+    /// order given, numbered as one Bundle's entries would be.
+    ///
+    /// # Errors
+    /// A [`DirectoryError`] for a resource that carries a `modifierExtension`
+    /// or repeats a `fullUrl` or a logical id, as [`Directory::from_json`]
+    /// refuses them.
+    pub(crate) fn from_resources(
+        organizations: impl IntoIterator<Item = (String, Organization)>,
+        endpoints: impl IntoIterator<Item = (String, Endpoint)>,
+    ) -> Result<Self, DirectoryError> {
+        let mut builder = Builder::default();
+        let mut index = 0_usize;
+        for (full_url, resource) in organizations {
+            builder.organization(index, Some(full_url), resource)?;
+            index = index.saturating_add(1);
+        }
+        for (full_url, resource) in endpoints {
+            builder.endpoint(index, Some(full_url), resource)?;
+            index = index.saturating_add(1);
+        }
+        Ok(builder.directory)
     }
 
     /// Every `Organization`, in entry order.
@@ -182,6 +174,76 @@ impl Directory {
             .endpoint
             .iter()
             .map(move |reference| resolve(reference, organization, &self.endpoints))
+    }
+}
+
+/// Directory content as it is read, entry by entry, with the checks every
+/// entry passes.
+#[derive(Default)]
+struct Builder {
+    directory: Directory,
+    full_urls: BTreeSet<String>,
+    organization_ids: BTreeSet<String>,
+    endpoint_ids: BTreeSet<String>,
+}
+
+impl Builder {
+    /// Adds the `Organization` of entry `index`.
+    fn organization(
+        &mut self,
+        index: usize,
+        full_url: Option<String>,
+        resource: Organization,
+    ) -> Result<(), DirectoryError> {
+        self.full_url(index, full_url.as_ref())?;
+        if !resource.modifier_extension.is_empty() {
+            return Err(DirectoryError::ModifierExtension { index });
+        }
+        if let Some(id) = &resource.id
+            && !self.organization_ids.insert(id.clone())
+        {
+            return Err(DirectoryError::DuplicateId { index });
+        }
+        self.directory.organizations.push(DirectoryOrganization {
+            entry: index,
+            full_url,
+            resource,
+        });
+        Ok(())
+    }
+
+    /// Adds the `Endpoint` of entry `index`.
+    fn endpoint(
+        &mut self,
+        index: usize,
+        full_url: Option<String>,
+        resource: Endpoint,
+    ) -> Result<(), DirectoryError> {
+        self.full_url(index, full_url.as_ref())?;
+        if !resource.modifier_extension.is_empty() {
+            return Err(DirectoryError::ModifierExtension { index });
+        }
+        if let Some(id) = &resource.id
+            && !self.endpoint_ids.insert(id.clone())
+        {
+            return Err(DirectoryError::DuplicateId { index });
+        }
+        self.directory.endpoints.push(DirectoryEndpoint {
+            entry: index,
+            full_url,
+            resource,
+        });
+        Ok(())
+    }
+
+    /// Refuses a `fullUrl` an earlier entry carries.
+    fn full_url(&mut self, index: usize, full_url: Option<&String>) -> Result<(), DirectoryError> {
+        match full_url {
+            Some(full_url) if !self.full_urls.insert(full_url.clone()) => {
+                Err(DirectoryError::DuplicateFullUrl { index })
+            }
+            _ => Ok(()),
+        }
     }
 }
 

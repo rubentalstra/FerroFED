@@ -38,6 +38,21 @@ filter = "info,hyper=warn,tower=warn,h2=warn"
 document = "/etc/ferrofed/registry.toml"
 format = "toml"
 
+# To read the members from an IHE mCSD care services directory instead, and
+# keep them in step with it, remove `document` and `format` above and set the
+# directory's FHIR base. Its Organization and Endpoint resources carry the
+# registry ids as the FHIR form of the registry does.
+# [registry.mcsd]
+# url = "https://directory.example.org/fhir"   # EDIT
+# refresh_interval_s = 300
+# deadline_ms = 30000   # one read or refresh, every page
+# max_pages = 200
+# max_bytes = 67108864
+# max_entries = 50000
+#
+# [registry.mcsd.credentials]
+# bearer_token_file = "/run/secrets/ferrofed/directory-token"
+
 [federation]
 # EDIT: your federation's identifier, which OPTIONS / names.
 id = "example-federation"

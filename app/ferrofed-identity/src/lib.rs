@@ -25,7 +25,9 @@
 //!   FerroFED's own testing devices, enabled only under the development
 //!   profile;
 //! - [`directory`]: the registry document in FHIR form, `Organization` and
-//!   `Endpoint` resources read through `ihe_iti`'s mCSD reader (N19, N20).
+//!   `Endpoint` resources read through `ihe_iti`'s mCSD reader (N19, N20),
+//!   and the registry read from an mCSD directory and kept in step with it
+//!   ([`directory::mcsd`], §15.1, N21).
 //!
 //! The onward-authentication seam lands with its issue.
 #![doc(test(attr(deny(warnings))))]
@@ -39,5 +41,3 @@ pub mod patient;
 pub mod pixm;
 pub mod resolver;
 pub mod xcpd;
-
-// TODO(#86): the directory sync.

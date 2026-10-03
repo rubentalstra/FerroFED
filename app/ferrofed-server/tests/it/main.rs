@@ -55,6 +55,7 @@ mod query_get;
 mod query_media;
 mod readiness;
 mod registry_fhir;
+mod registry_mcsd;
 mod reload;
 mod request_log;
 mod resolution;

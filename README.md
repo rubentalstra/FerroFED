@@ -66,14 +66,14 @@ lists what each release shipped and what is planned.
   say which points and statements a test holds.
 - openEHR ITS-REST 1.1.0 on both faces, and openEHR AQL 1.1.0, through the
   published `openehr-*` crates.
-- IHE PIXm ITI-83 for identity resolution. The `ihe-iti` crate also carries
-  the PDQm ITI-78 client, and the mCSD resource reader the FHIR form of the
-  registry uses.
+- IHE PIXm ITI-83 for identity resolution, and IHE mCSD ITI-90 and ITI-91
+  for addressing: the registry can be read from a care services directory
+  and kept in step with it. The `ihe-iti` crate also carries the PDQm ITI-78
+  client.
 - IHE XCPD ITI-55 for localization: the `xcpd` feature of `ihe-iti` is an
   Initiating Gateway, and an undirected patient query asks only the members
   whose communities it discovers, failing closed when a gateway does not
-  answer. mCSD addressing, PMIR and the Dutch Generic Functions are planned
-  for v0.0.8.
+  answer. PMIR and the Dutch Generic Functions are planned for v0.0.8.
 
 ## Quickstart
 

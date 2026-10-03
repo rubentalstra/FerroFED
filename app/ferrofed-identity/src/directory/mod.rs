@@ -77,6 +77,7 @@
 //! ```
 
 pub mod error;
+pub mod mcsd;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -144,7 +145,18 @@ pub fn read(path: &Path) -> Result<RegistrySnapshot, FhirFormError> {
 /// [`FhirFormError::Registry`] for a membership rule the native form shares.
 pub fn snapshot_from_json(body: &[u8]) -> Result<RegistrySnapshot, FhirFormError> {
     let directory = Directory::from_json(body).map_err(FhirFormError::Directory)?;
-    let document = document(&directory)?;
+    snapshot_from_directory(&directory)
+}
+
+/// Validates directory content as a registry in FHIR form, whether a
+/// document carried it or a care services directory answered it.
+///
+/// # Errors
+///
+/// Every error of [`snapshot_from_json`] but [`FhirFormError::Directory`],
+/// which the content's reader has already decided.
+pub fn snapshot_from_directory(directory: &Directory) -> Result<RegistrySnapshot, FhirFormError> {
+    let document = document(directory)?;
     RegistrySnapshot::from_document(document).map_err(FhirFormError::Registry)
 }
 

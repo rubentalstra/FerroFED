@@ -16,6 +16,9 @@
 //!   carrier for an identifier and its fragments, raw and percent-decoded;
 //! - [`issuer`]: a test issuer that mints RFC 9068 access tokens and serves
 //!   its key set (#80);
+//! - [`mcsd`]: the harness care services directory, a test device that
+//!   answers ITI-90 and ITI-91 over the registry members a test puts in it
+//!   (#86);
 //! - [`mock`]: the wiremock server every suite stands its nodes up with,
 //!   dropped outside the test's runtime;
 //! - [`oauth`]: the harness OAuth 2.0 token endpoint, which verifies the
@@ -36,6 +39,7 @@
 pub mod containers;
 pub mod issuer;
 pub mod leak;
+pub mod mcsd;
 pub mod mock;
 pub mod oauth;
 pub mod pix;

@@ -165,7 +165,7 @@ pub(super) fn resolve(config: &Config) -> Result<Option<XcpdSettings>, Error> {
     };
     // NOTE: no specification governs this: our own design; the community map
     // names registry members, so it means nothing without a registry.
-    if config.registry.document.is_none() {
+    if !config.registry.configured() {
         return Err(Error::Missing {
             key: String::from("registry.document"),
         });

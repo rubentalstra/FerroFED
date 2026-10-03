@@ -10,6 +10,12 @@
 //! Each resource stays as `fhir-types` decodes it; what a caller makes of a
 //! connection type, a status or an identifier is the caller's policy.
 //!
+//! [`client::McsdClient`] asks a directory over HTTP: ITI-90, Find Matching
+//! Care Services, and ITI-91, Request Care Services Updates.
+//! [`replica::Replica`] holds a directory's resources read with the first and
+//! keeps them in step with the second, and answers them as a
+//! [`directory::Directory`].
+//!
 //! ```
 //! use ihe_iti::mcsd::directory::{Directory, Resolution};
 //!
@@ -43,7 +49,8 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod budget;
+pub mod client;
 pub mod directory;
 pub mod error;
-
-// TODO(#86): the ITI-90 directory client, answering with a `Directory`.
+pub mod replica;

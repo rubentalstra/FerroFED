@@ -17,7 +17,9 @@ cross-reference, a testing device accepted only under the development profile.
 It also reads the registry document in FHIR form, a Bundle of `Organization`
 and `Endpoint` resources read through `ihe-iti`'s mCSD reader, into the
 registry's members, refusing an endpoint whose connection type is not the
-openEHR Query API code.
+openEHR Query API code. The same mapping reads the registry from an mCSD care
+services directory, over `ihe-iti`'s ITI-90 and ITI-91 client, and keeps it in
+step with the directory.
 The remaining seams and the resolution step land with
 [FerroFED issue #43](https://github.com/FerroHEALTH/FerroFED/issues/43); the
 design is recorded in the repository's architecture document. The adapters

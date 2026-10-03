@@ -256,6 +256,7 @@ impl Dependencies {
                 .localizer
                 .as_ref()
                 .map(|slot| Observed::from_code(slot.load(Ordering::Relaxed))),
+            directory: None,
         }
     }
 }
@@ -276,6 +277,12 @@ pub struct Report {
     /// The localizer's state, absent when no localizer is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub localizer: Option<Observed>,
+    /// The state of the care services directory the registry is read from,
+    /// absent when the registry is a document: `up` after its last answer,
+    /// `failing` after a `5xx` or an answer that breaks ITI-90 or ITI-91, and
+    /// `down` when it did not answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory: Option<Observed>,
 }
 
 #[cfg(test)]

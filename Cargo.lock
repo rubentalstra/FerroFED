@@ -1042,6 +1042,7 @@ dependencies = [
  "ferrofed-testkit",
  "http",
  "ihe-iti",
+ "jiff",
  "openehr-its",
  "reqwest",
  "secrecy",
@@ -1776,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "ihe-iti"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "fhir-types",
  "http",
