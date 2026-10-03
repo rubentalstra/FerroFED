@@ -249,3 +249,81 @@ async fn a_pix_manager_that_does_not_answer_fails_the_query_closed() -> TestResu
     assert_eq!(0, pix.queries(), "the Manager was never reached");
     Ok(())
 }
+
+/// What the test reads of `meta.federation.localization`.
+#[derive(Debug, serde::Deserialize)]
+struct Envelope {
+    meta: EnvelopeMeta,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct EnvelopeMeta {
+    federation: Diagnostics,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Diagnostics {
+    localization: Option<LocalizationDiagnostic>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LocalizationDiagnostic {
+    error: String,
+}
+
+#[tokio::test]
+async fn the_localizer_error_names_the_manager_status_once_and_the_log_keeps_the_chain()
+-> TestResult {
+    let pix = fed_manager().await?;
+    let proxy = CapturingProxy::start(pix.origin()).await?;
+    let servers = members().await;
+    let dir = tempfile::tempdir()?;
+    let app = gateway(
+        dir.path(),
+        [&servers[0].uri(), &servers[1].uri(), &servers[2].uri()],
+        &format!("{}/fhir/", proxy.origin()),
+    )?;
+    proxy.set_fault(Fault::Status(StatusCode::SERVICE_UNAVAILABLE));
+    let logs = crate::support::Logs::default();
+    let capture = ferrofed_server::telemetry::subscriber(
+        ferrofed_server::telemetry::Rendering::Json,
+        "info",
+        false,
+        logs.clone(),
+    )?;
+    let guard = tracing::subscriber::set_default(capture);
+    let (status, text) = call(app, post(body(&query())?)?).await?;
+    drop(guard);
+    assert_eq!(StatusCode::OK, status, "{text}");
+
+    let status = StatusCode::SERVICE_UNAVAILABLE.to_string();
+    let answer: Answer = serde_json::from_str(&text)?;
+    for endpoint in &answer.meta.federation.endpoints {
+        let error = serde_json::to_string(&endpoint.error)?;
+        assert_eq!(1, error.matches(&status).count(), "{error}");
+        assert!(
+            error.contains("the PIX Manager could not cross-reference the patient"),
+            "the binding's own reason: {error}"
+        );
+    }
+    let envelope: Envelope = serde_json::from_str(&text)?;
+    let localization = envelope
+        .meta
+        .federation
+        .localization
+        .ok_or("§14.1 SHOULD: the localizer's failure")?;
+    assert_eq!(
+        1,
+        localization.error.matches(&status).count(),
+        "{}",
+        localization.error
+    );
+
+    let log = logs.text();
+    assert!(
+        log.contains("the PIX Manager answered 503 Service Unavailable"),
+        "the log keeps the whole cause chain: {log}"
+    );
+    assert!(!log.contains(&patient().value()), "{log}");
+    Ok(())
+}

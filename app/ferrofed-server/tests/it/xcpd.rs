@@ -285,6 +285,41 @@ async fn a_failing_gateway_fails_the_query_closed_and_asks_no_member() -> TestRe
     Ok(())
 }
 
+#[tokio::test]
+async fn the_localizer_error_names_the_gateway_status_once() -> TestResult {
+    let servers = members().await;
+    let [a, b, c] = urls(&servers);
+    let unavailable = Server::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(wiremock::ResponseTemplate::new(503))
+        .mount(&unavailable)
+        .await;
+    let dir = tempfile::tempdir()?;
+    let app = gateway(&config(
+        dir.path(),
+        [&a, &b, &c],
+        &[format!("{}/RespondingGateway", unavailable.uri())],
+        "development",
+        "",
+    )?)?;
+
+    let (status, text) = call(app, post(body(&patient_query())?)?).await?;
+    assert_eq!(StatusCode::OK, status, "{text}");
+    let answer: Federated = serde_json::from_str(&text)?;
+    let status = StatusCode::SERVICE_UNAVAILABLE.to_string();
+    for endpoint in &answer.meta.federation.endpoints {
+        assert_eq!("not-localized", endpoint.status);
+        let error = serde_json::to_string(&endpoint.error)?;
+        assert_eq!(1, error.matches(&status).count(), "{error}");
+        assert!(
+            error.contains("responding gateway 0 could not discover the patient"),
+            "the binding's own reason: {error}"
+        );
+    }
+    assert_eq!([0, 0, 0], asked_counts(&servers).await?);
+    Ok(())
+}
+
 #[test]
 fn an_http_gateway_outside_development_refuses_to_boot_naming_its_key() -> TestResult {
     let dir = tempfile::tempdir()?;

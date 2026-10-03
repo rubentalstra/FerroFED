@@ -209,6 +209,10 @@ shaping, single-node routing and the targeting mechanisms in 0.0.6.
   `node-error` with nothing sent to it, on the federated query, the
   definition fan-out and a routed request (`424 node-error`), where it was a
   gateway error before (§13.1, §11.1).
+- The localizer error a member and `meta.federation.localization.error`
+  carry names the status the localization service answered once, with the
+  binding's own reason, for PIXm and XCPD alike (#420). The log keeps the
+  whole cause chain.
 
 ### Security
 

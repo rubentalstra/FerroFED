@@ -118,22 +118,27 @@ pub(crate) async fn localize(
         },
         Localization::NoRecords => Localized::nobody(None),
         Localization::Unavailable(error @ LocalizerError::AuditFailed(_)) => {
-            let cause = crate::chain(&error);
             // NOTE: §14.1, ITI TF-2 §3.55.5.1: ask-all covers a localizer outage, never an
             // exchange the gateway could not audit, so this fails closed under every policy.
-            tracing::error!(error = %cause, "the localization exchange could not be audited");
+            tracing::error!(
+                error = %crate::chain(&error),
+                "the localization exchange could not be audited"
+            );
             Localized::nobody(Some(ErrorDetail::Text(format!(
-                "the localization exchange could not be audited, so its answer is not used: {cause}"
+                "the localization exchange could not be audited, so its answer is not used: {}",
+                client_text(&error)
             ))))
         }
         Localization::Unavailable(error) => {
-            let cause = crate::chain(&error);
             tracing::warn!(
-                error = %cause,
+                error = %crate::chain(&error),
                 on_failure = %policy.on_failure(),
                 "the localizer did not answer"
             );
-            let failure = ErrorDetail::Text(format!("the localizer could not answer: {cause}"));
+            let failure = ErrorDetail::Text(format!(
+                "the localizer could not answer: {}",
+                client_text(&error)
+            ));
             match policy.on_failure() {
                 OnFailure::Closed => Localized::nobody(Some(failure)),
                 OnFailure::AskAll => Localized {
@@ -143,5 +148,89 @@ pub(crate) async fn localize(
                 },
             }
         }
+    }
+}
+
+/// The text a client reads of a localizer's `error`: its cause chain, with
+/// the status the localization service answered named once.
+///
+/// A binding's own error often restates that status, so a link of the chain
+/// that names it again is left out here. The log keeps the whole chain.
+fn client_text(error: &LocalizerError) -> String {
+    let status = error.status().map(|status| status.to_string());
+    let mut line = error.to_string();
+    let mut cause = std::error::Error::source(error);
+    while let Some(link) = cause {
+        let text = link.to_string();
+        // NOTE: no specification governs this text: our own design; the rule
+        // reads the rendering only, and the outcome stays typed.
+        if status
+            .as_deref()
+            .is_none_or(|status| !text.contains(status))
+        {
+            line.push_str(": ");
+            line.push_str(&text);
+        }
+        cause = link.source();
+    }
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use ferrofed_identity::localizer::LocalizerError;
+    use http::StatusCode;
+
+    use super::client_text;
+
+    #[derive(Debug)]
+    struct Link(&'static str, Option<Box<Link>>);
+
+    impl fmt::Display for Link {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Link {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1
+                .as_deref()
+                .map(|link| -> &(dyn std::error::Error + 'static) { link })
+        }
+    }
+
+    #[test]
+    fn an_answered_status_is_named_once_with_the_binding_reason() {
+        let error = LocalizerError::Answered {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            source: Box::new(Link(
+                "the service could not cross-reference the patient",
+                Some(Box::new(Link(
+                    "the service answered 503 Service Unavailable",
+                    None,
+                ))),
+            )),
+        };
+        assert_eq!(
+            "the localization service answered 503 Service Unavailable: the service could not cross-reference the patient",
+            client_text(&error)
+        );
+        assert_eq!(
+            "the localization service answered 503 Service Unavailable: the service could not cross-reference the patient: the service answered 503 Service Unavailable",
+            crate::chain(&error),
+            "the log keeps the whole chain"
+        );
+    }
+
+    #[test]
+    fn a_failure_without_a_status_keeps_its_whole_chain() {
+        let error = LocalizerError::Backend(Box::new(Link(
+            "the service could not be reached",
+            Some(Box::new(Link("connection refused", None))),
+        )));
+        assert_eq!(crate::chain(&error), client_text(&error));
     }
 }
